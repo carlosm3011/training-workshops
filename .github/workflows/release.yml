@@ -1,8 +1,8 @@
 name: Publish PDF release
 
 # Release tags are per course: <course-dir>/vX.Y.Z (created by
-# `make release` in that course). The PDF is not built here - it is
-# the one committed under <course-dir>/_book/.
+# `make release` in that course). PDFs are not built here - CI attaches
+# the ones committed under <course-dir>/_book/.
 on:
   push:
     tags:
@@ -18,23 +18,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find PDF in <course>/_book
+      - name: Find PDFs in <course>/_book
         id: pdf
         env:
           TAG: ${{ github.ref_name }}
         run: |
           COURSE="${TAG%%/*}"
-          PDF_PATH=$(find "$COURSE/_book" -maxdepth 1 -iname "*.pdf" | head -n 1)
-          if [ -z "$PDF_PATH" ]; then
+          # A course may build several PDFs (e.g. a book plus
+          # _book/labguide/), so attach every PDF under _book/.
+          PDFS=$(find "$COURSE/_book" -iname "*.pdf")
+          if [ -z "$PDFS" ]; then
             echo "No PDF found under $COURSE/_book" >&2
             exit 1
           fi
-          echo "path=$PDF_PATH" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "$PDF_PATH")" >> "$GITHUB_OUTPUT"
+          {
+            echo "paths<<EOF"
+            echo "$PDFS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.pdf.outputs.path }}
+          files: ${{ steps.pdf.outputs.paths }}
           name: ${{ github.ref_name }}
           generate_release_notes: true

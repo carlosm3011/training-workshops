@@ -1,0 +1,50 @@
+\usepackage{graphicx}
+\let\oldincludegraphics\includegraphics
+\renewcommand{\includegraphics}[2][]{%
+  \oldincludegraphics[width=\linewidth,height=0.9\textheight,keepaspectratio]{#2}%
+}
+
+% Carried over from the course's original pandoc metadata.yaml: keep
+% each code block on a single page.
+\usepackage{etoolbox}
+\BeforeBeginEnvironment{Highlighting}{\begin{minipage}{\linewidth}}
+\AfterEndEnvironment{Highlighting}{\end{minipage}}
+\BeforeBeginEnvironment{verbatim}{\begin{minipage}{\linewidth}}
+\AfterEndEnvironment{verbatim}{\end{minipage}}
+
+% Custom title page addendum: the default LaTeX title block only
+% prints author names, silently dropping the affiliation, and has no
+% notion of a package version or release history. This appends those
+% details manually below the standard title block. NOTE: the author
+% details below are hardcoded and duplicate the book:author: metadata
+% in _quarto.yml - if you change them there, update this block too.
+% The version string and the version-history table are filled in by
+% `make book` (via scripts/generate-title-page.sh) from this course's
+% Makefile VERSION variable and its git tags, respectively - this file
+% (title-page.tex.in) is the tracked template; the generated
+% title-page.tex (gitignored) is what _quarto.yml actually includes.
+% Both PDFs (book and lab guide) share it. The history table only
+% lists tags that exist at build time, so the version being built
+% won't list itself (it isn't tagged yet) - "previous versions", as
+% intended.
+\usepackage{hyperref}
+\let\oldmaketitle\maketitle
+\renewcommand{\maketitle}{%
+  \oldmaketitle
+  \begin{center}
+  \small
+  Version @@VERSION@@
+  \bigskip
+
+  Carlos M. Martinez\\
+  XT6 Labs
+  \bigskip
+
+  \textbf{Version history}\\[4pt]
+  \begin{tabular}{ll}
+  \textbf{Version} & \textbf{Date} \\
+  \hline
+  @@VERSION_HISTORY@@
+  \end{tabular}
+  \end{center}
+}

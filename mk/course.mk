@@ -2,14 +2,24 @@
 # Makefile that sets the variables below and then includes this file:
 #
 #   VERSION        := v0.1.0                    # required
-#   BOOK_PDF_NAME  := My-Course-Title.pdf       # required: Quarto names the PDF after book.title
+#   BOOK_PDFS      := _book/My-Course-Title.pdf # required: Quarto names each PDF after book.title
+#   BOOK_PROFILES  := book labguide             # optional: render once per Quarto profile
+#                                               #   (_quarto-<profile>.yml), in this order
 #   SLIDE_MODULES  := 01-Intro 02-Next ...      # optional: decks built by slides/build_moduleNN.py
 #   SLIDE_TEMPLATE := lacnic46.pptx             # optional: file under _templates/ (default lacnic46.pptx)
 #   EXTRA_TAG_PATTERN := refs/tags/v*           # optional: extra tags to show in the title-page history
 #   include ../mk/course.mk
 #
 # The course name is the directory name; it prefixes release tags
-# (<course>/vX.Y.Z), which .github/workflows/ uses to find the PDF.
+# (<course>/vX.Y.Z), which .github/workflows/ uses to find the PDFs.
+#
+# BOOK_PROFILES is for courses that build several PDFs from one set of
+# sources (e.g. a book and a lab guide). Quarto *appends* a profile's
+# book.chapters to the base config's, so with profiles the chapter
+# lists must live only in the _quarto-<profile>.yml files. List the
+# profile whose output-dir is _book first: rendering it clears _book/,
+# so profiles writing to subdirectories (e.g. _book/labguide) must
+# render after it.
 #
 # Chapters are authored as plain .md files (Obsidian-compatible). Quarto
 # needs .qmd files for the {mermaid} executable cells that make diagrams
@@ -27,10 +37,14 @@ SCRIPTS  := $(ROOT)/scripts
 SLIDE_TEMPLATE    ?= lacnic46.pptx
 EXTRA_TAG_PATTERN ?=
 
-MD_FILES     := $(filter-out CLAUDE.md,$(wildcard *.md))
-BOOK_PDF     := _book/$(BOOK_PDF_NAME)
+# Agent/readme files that sit next to the chapters but aren't part of
+# the book. Keep in sync with NON_CHAPTERS in scripts/mermaid-*.sh.
+NON_CHAPTERS := CLAUDE.md README.md GEMINI.md AGENTS.md
+MD_FILES     := $(filter-out $(NON_CHAPTERS),$(wildcard *.md))
+BOOK_PDF     := $(firstword $(BOOK_PDFS))
+BOOK_PROFILES ?=
 TAG          := $(COURSE)/$(VERSION)
-BOOK_DEPS    := $(MD_FILES) _quarto.yml title-page.tex.in Makefile $(ROOT)/mk/course.mk \
+BOOK_DEPS    := $(MD_FILES) _quarto.yml $(wildcard _quarto-*.yml) title-page.tex.in Makefile $(ROOT)/mk/course.mk \
                 $(SCRIPTS)/mermaid-pre-render.sh $(SCRIPTS)/mermaid-post-render.sh \
                 $(SCRIPTS)/generate-title-page.sh
 
@@ -42,8 +56,9 @@ SLIDE_OUT_DIR     := _slides
 help:
 	@echo "Course: $(COURSE)  (version $(VERSION), next tag $(TAG))"
 	@echo " "
-	@echo "  make book    Render $(BOOK_PDF). Rebuilds only if a chapter .md,"
-	@echo "               _quarto.yml, title-page.tex.in, a shared script, or a"
+	@echo "  make book    Render $(BOOK_PDFS)."
+	@echo "               Rebuilds only if a chapter .md, a _quarto*.yml,"
+	@echo "               title-page.tex.in, a shared script, or a"
 	@echo "               Makefile (e.g. a VERSION bump) changed since the last"
 	@echo "               build. Title page shows VERSION and today's date."
 	@echo " "
@@ -52,7 +67,7 @@ help:
 	@echo "               Requires python-pptx."
 	@echo " "
 	@echo "  make release Commit this course's tracked changes, push, tag $(TAG),"
-	@echo "               and push the tag (CI then publishes $(BOOK_PDF))."
+	@echo "               and push the tag (CI then publishes the _book/ PDFs)."
 	@echo " "
 	@echo "  make clean   Remove _book/, .quarto/, stray .qmd files, the generated"
 	@echo "               title-page.tex, and stray slides/*.pptx left by an"
@@ -61,9 +76,13 @@ help:
 book: $(BOOK_PDF)
 
 $(BOOK_PDF): $(BOOK_DEPS)
-	bash $(SCRIPTS)/generate-title-page.sh . $(VERSION) $(EXTRA_TAG_PATTERN)
+	bash $(SCRIPTS)/generate-title-page.sh . $(VERSION) '$(EXTRA_TAG_PATTERN)'
 	bash $(SCRIPTS)/mermaid-pre-render.sh .
-	quarto render; status=$$?; bash $(SCRIPTS)/mermaid-post-render.sh .; exit $$status
+	status=0; \
+	$(if $(BOOK_PROFILES), \
+	  for p in $(BOOK_PROFILES); do quarto render --profile $$p || { status=$$?; break; }; done, \
+	  quarto render || status=$$?); \
+	bash $(SCRIPTS)/mermaid-post-render.sh .; exit $$status
 
 slides:
 	@[ -n "$(SLIDE_MODULES)" ] || { echo "$(COURSE) defines no SLIDE_MODULES."; exit 1; }

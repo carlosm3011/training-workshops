@@ -11,8 +11,12 @@
 set -euo pipefail
 cd "$1"
 
+# Agent/readme files that aren't book chapters. Keep in sync with
+# NON_CHAPTERS in mk/course.mk.
+NON_CHAPTERS=" CLAUDE.md README.md GEMINI.md AGENTS.md "
+
 for f in *.md; do
-  [ "$f" = "CLAUDE.md" ] && continue
+  [[ "$NON_CHAPTERS" == *" $f "* ]] && continue
   base="${f%.md}"
   rm -f "${base}.qmd"
 done

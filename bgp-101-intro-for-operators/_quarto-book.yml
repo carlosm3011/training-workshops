@@ -1,0 +1,13 @@
+# `make book` renders this profile first: its output-dir is _book/,
+# which Quarto clears on render.
+book:
+  title: "BGP 101: A Practical Guide to the Border Gateway Protocol"
+  chapters:
+    - index.qmd
+    - 01-basic-concepts.qmd
+    - 02-bgp-messages.qmd
+    - 03-path-attributes-bestpath-selection.qmd
+    - 05-announcing-my-routes.qmd
+    - 06-ibgp-mechanics.qmd
+    - 08-accepting-routes-from-others.qmd
+    - 09-traffic-engineering.qmd

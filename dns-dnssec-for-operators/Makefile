@@ -3,7 +3,7 @@
 # from the repo root.
 
 VERSION       := v0.6.4
-BOOK_PDF_NAME := DNS-y-DNSSEC-para-Operadores.pdf
+BOOK_PDFS     := _book/DNS-y-DNSSEC-para-Operadores.pdf
 SLIDE_MODULES := 01-Introduccion 02-Registros 03-Zonas-BIND \
                  04-Firmando-con-BIND-y-KASP 05-Monitoreo-Troubleshooting \
                  06-Arquitectura-Hidden-Signer 07-DNSSEC-Avanzado

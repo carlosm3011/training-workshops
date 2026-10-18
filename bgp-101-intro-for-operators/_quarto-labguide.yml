@@ -1,0 +1,12 @@
+# Rendered after the book profile, into a subdirectory of _book/.
+project:
+  output-dir: _book/labguide
+
+book:
+  title: "BGP 101: Lab Guide"
+  chapters:
+    - index.qmd
+    - 04-lab-1.qmd
+    - 07-lab-2.qmd
+    - 10-lab-3.qmd
+    - 11-lab-4.qmd
