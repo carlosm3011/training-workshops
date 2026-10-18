@@ -1,7 +1,7 @@
 # BGP 101. Build rules live in ../mk/course.mk; run `make help` here,
 # or `make <target> COURSE=bgp-101-intro-for-operators` from the repo root.
 
-VERSION       := v0.1.0
+VERSION       := v0.2.0
 # Two PDFs from one set of sources: the book and the lab guide, one
 # Quarto profile each (_quarto-book.yml, _quarto-labguide.yml).
 BOOK_PROFILES := book labguide

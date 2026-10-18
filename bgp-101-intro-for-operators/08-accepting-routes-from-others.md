@@ -11,7 +11,7 @@ When you connect to an ISP or a peer, they will send you BGP updates. Accepting 
 A **Routing Policy** is a set of rules that determines how a router handles routing information. In BGP, policies are typically applied at the "edge" of your network—where you interface with other Autonomous Systems.
 
 ### The Inbound Pipeline
-When a BGP update arrives from a neighbor, it doesn't immediately enter your BGP table (Loc-RIB). It passes through a series of filters first.
+When a BGP update arrives from a neighbor, it doesn't immediately enter your BGP table (Loc-RIB). It passes through your inbound policy first. (In FRR, eBGP sessions without an inbound policy accept nothing at all, as Lab 1 shows.)
 
 ```mermaid {caption="The BGP Inbound Processing Pipeline"}
 graph LR
@@ -42,18 +42,18 @@ Prefix-lists match routes based on the **network address** and the **mask length
 ### AS-PATH Access-Lists
 These match routes based on the **AS_PATH** attribute using Regular Expressions (Regex).
 
-*   **^** : Start of the path.
-*   **$** : End of the path.
-*   **_** : Any delimiter (space, comma, start/end).
-*   **.*** : Anything.
+*   `^` : Start of the path.
+*   `$` : End of the path.
+*   `_` : Any delimiter (space, comma, start/end).
+*   `.*` : Anything.
 
 **Common Regex Patterns:**
 | Pattern | Meaning |
 | :--- | :--- |
-| `^$` | Routes originated by the local AS (Internal). |
-| `^65001$` | Routes originated by AS 65001 and directly connected. |
+| `^$` | Routes originated by the local AS (empty AS_PATH). |
+| `^65001$` | Routes originated by AS 65001 and received directly from it. |
 | `_65001_` | Any route that has passed through AS 65001. |
-| `^65001 .*` | Routes originated by AS 65001 or any of its customers. |
+| `^65001_` | Routes received from neighbor AS 65001, whoever originated them. |
 
 ### Route-Maps
 The "Swiss Army Knife" of routing. Route-maps use `match` statements to find routes and `set` statements to change their attributes.
@@ -69,7 +69,7 @@ route-map MY-POLICY permit 10
 
 ## 3. Hands-on Scenario 1: The "Default Route Only" Filter
 
-Imagine you have a low-end router with limited memory. You only want a **Default Route** (0.0.0.0/0) from your ISP to reach the Internet. You don't want the 900,000+ prefixes of the full Internet table.
+Imagine you have a low-end router with limited memory. You only want a **Default Route** (0.0.0.0/0) from your ISP to reach the Internet. You don't want the roughly one million prefixes of the full IPv4 Internet table.
 
 ### Configuration
 
@@ -105,7 +105,7 @@ Accept only routes where the AS_PATH consists of exactly one AS: **65001**.
 
 1.  **Define the AS-PATH List:**
     ```text
-    ip as-path access-list AS-OWNED-ONLY permit ^65001$
+    bgp as-path access-list AS-OWNED-ONLY permit ^65001$
     ```
 
 2.  **Create the Route-Map:**
@@ -127,14 +127,25 @@ Accept only routes where the AS_PATH consists of exactly one AS: **65001**.
 ## 5. Hands-on Scenario 3: Defensive Hygiene & Prefix Limits
 
 ### The "Bogon" Filter
-"Bogons" are IP spaces that should never appear in the public BGP table (e.g., private ranges, reserved space). Accepting them can lead to routing loops or security holes.
+"Bogons" are IP spaces that should never appear in the public BGP table (e.g., private ranges, reserved space). Accepting them can lead to routing loops or security holes. A good inbound filter also rejects prefixes longer than /24 (/48 in IPv6), which most networks don't accept, and your own address space coming back from outside.
 
 ```text
-ip prefix-list PL-BOGONS deny 10.0.0.0/8 le 32
-ip prefix-list PL-BOGONS deny 172.16.0.0/12 le 32
-ip prefix-list PL-BOGONS deny 192.168.0.0/16 le 32
-ip prefix-list PL-BOGONS permit 0.0.0.0/0 le 32
+ip prefix-list PL-BOGONS seq 5 deny 0.0.0.0/8 le 32
+ip prefix-list PL-BOGONS seq 10 deny 10.0.0.0/8 le 32
+ip prefix-list PL-BOGONS seq 15 deny 100.64.0.0/10 le 32
+ip prefix-list PL-BOGONS seq 20 deny 127.0.0.0/8 le 32
+ip prefix-list PL-BOGONS seq 25 deny 169.254.0.0/16 le 32
+ip prefix-list PL-BOGONS seq 30 deny 172.16.0.0/12 le 32
+ip prefix-list PL-BOGONS seq 35 deny 192.0.2.0/24 le 32
+ip prefix-list PL-BOGONS seq 40 deny 192.168.0.0/16 le 32
+ip prefix-list PL-BOGONS seq 45 deny 198.18.0.0/15 le 32
+ip prefix-list PL-BOGONS seq 50 deny 198.51.100.0/24 le 32
+ip prefix-list PL-BOGONS seq 55 deny 203.0.113.0/24 le 32
+ip prefix-list PL-BOGONS seq 60 deny 224.0.0.0/3 le 32
+ip prefix-list PL-BOGONS seq 100 permit 0.0.0.0/0 le 24
 ```
+
+The last line permits everything else up to /24, including a default route. This list isn't exhaustive: [Team Cymru](https://www.team-cymru.com/bogon-reference) maintains the reference, including the "full bogons" that also cover unallocated space. Note that this course's labs use the documentation and benchmarking ranges (`192.0.2.0/24`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`) as if they were public addresses, so the lab filters don't deny them.
 
 ### Prefix Limits
 What if your neighbor accidentally sends you 1,000,000 routes instead of the expected 10? To protect your router, you should set a **Maximum Prefix** limit.
@@ -143,7 +154,7 @@ What if your neighbor accidentally sends you 1,000,000 routes instead of the exp
 router bgp 65000
  neighbor 10.0.13.3 maximum-prefix 1000
 ```
-If the neighbor sends more than 1,000 prefixes, the BGP session will immediately **shutdown** to protect your memory. It will remain in the `Idle (PfxCt)` state until you manually reset it.
+If the neighbor sends more than 1,000 prefixes, the BGP session will immediately **shutdown** to protect your memory. It will remain in the `Idle (PfxCt)` state until you manually reset it (`clear ip bgp 10.0.13.3`). Two variations are worth knowing: `maximum-prefix 1000 restart 30` brings the session back by itself after 30 minutes, and `maximum-prefix 1000 warning-only` only logs a warning.
 
 ---
 
@@ -160,9 +171,11 @@ How do you know if your policy is working?
 *   `show ip bgp neighbor 10.0.13.3 routes` (What you kept).
 
 ### Applying Policy Changes
-If you change a route-map, BGP doesn't automatically re-process existing routes. You must trigger a "Soft Reset". Unlike a hard reset, this **does not drop the TCP session**.
+Many implementations, such as Cisco IOS, don't re-process existing routes when you change a route-map. You must trigger a "Soft Reset". Unlike a hard reset, this **does not drop the TCP session**.
 
 ```text
 clear ip bgp 10.0.13.3 soft in
 ```
 This tells the router: *"Ask the neighbor to re-send their updates so I can run them through my new filters."*
+
+FRR does this by itself a few seconds after you change a route-map or prefix-list in use, or attach a route-map to a neighbor. The soft reset is still available, and harmless.

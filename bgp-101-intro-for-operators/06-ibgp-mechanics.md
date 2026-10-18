@@ -1,7 +1,6 @@
-# Chapter 06: iBGP Mechanics and Internal Propagation
+# iBGP Mechanics and Internal Propagation
 
-In previous chapters
-, we focused mostly on eBGP (External BGP) to connect different Autonomous Systems. However, most networks have more than one BGP router. How these internal routers share BGP information is the realm of **Internal BGP (iBGP)**.
+In previous chapters, we focused mostly on eBGP (External BGP) to connect different Autonomous Systems. However, most networks have more than one BGP router. How these internal routers share BGP information is the realm of **Internal BGP (iBGP)**.
 
 iBGP is not just "BGP between friends"; it has very specific rules that differ from eBGP to prevent loops and ensure stability.
 
@@ -13,12 +12,12 @@ In eBGP, we usually peer using the IP addresses of the physical link connecting 
 If a physical link between two internal routers fails, but there is another path through the network (OSPF/IS-IS), the BGP session should stay up. Since a Loopback interface never goes down unless the router itself fails, it provides a stable anchor for the TCP session.
 
 **The `update-source` command:**
-When peering with a Loopback, you must tell BGP to use that Loopback's IP as the source of its BGP packets, otherwise, the neighbor will reject the connection.
+When peering with a Loopback, you must tell BGP to use that Loopback's IP as the source of its BGP packets. Otherwise, the packets leave from the outgoing interface's address, which doesn't match the neighbor address configured on the other end, and the connection is rejected. In FRR, the loopback interface is `lo` (Cisco IOS calls it `Loopback0`).
 
 ```text
 router bgp 65001
- neighbor 1.1.1.1 remote-as 65001
- neighbor 1.1.1.1 update-source Loopback0
+ neighbor 10.255.0.1 remote-as 65001
+ neighbor 10.255.0.1 update-source lo
 ```
 
 ---
@@ -27,7 +26,9 @@ router bgp 65001
 
 This is the most important rule in iBGP:
 
-> **"A route learned from an iBGP peer will never be advertised to another iBGP peer."**
+> **"A route learned from an iBGP peer is not advertised to other iBGP peers."**
+
+(Route reflectors, covered below, are the controlled exception.)
 
 ```mermaid {caption="iBGP Split-Horizon Rule"}
 graph LR
@@ -58,8 +59,7 @@ By default, BGP **does not change the Next-Hop attribute** when sending a route 
 
 ```mermaid {caption="iBGP Next-Hop-Self Problem"}
 graph LR
-    ISP[ISP Router 10.0.0.1]
- -- eBGP Update --> R1[R1 Border]
+    ISP[ISP Router 10.0.0.1] -- eBGP Update --> R1[R1 Border]
     subgraph AS 65001
     R1 -- "iBGP (Next-Hop: 10.0.0.1)" --> R2[R2 Internal]
     end
@@ -69,7 +69,7 @@ graph LR
 ```
 
 ### The Problem
-If Router A (eBGP) receives a route from an ISP and sends it to Router B (iBGP), the Next-Hop remains the IP of the ISP's router. If Router B doesn't have a route to that ISP's IP in its IGP (OSPF), it will mark the BGP route as **"Invalid"** or **"Inaccessible"**.
+If Router A (eBGP) receives a route from an ISP and sends it to Router B (iBGP), the Next-Hop remains the IP of the ISP's router. If Router B doesn't have a route to that ISP's IP in its IGP (OSPF), it will mark the BGP route as **"Invalid"** or **"Inaccessible"** and won't use it. Lab 2 shows what this looks like.
 
 ### The Solution: `next-hop-self`
 We tell the border router to change the Next-Hop to its own Loopback IP before sending it to internal peers.
@@ -77,7 +77,7 @@ We tell the border router to change the Next-Hop to its own Loopback IP before s
 ```text
 router bgp 65001
  address-family ipv4 unicast
-  neighbor 1.1.1.1 next-hop-self
+  neighbor 10.255.0.2 next-hop-self
 ```
 
 ---
@@ -109,7 +109,13 @@ graph TD
     RR -.->|Reflects| NC
 ```
 
-A Route Reflector is a router allowed to re-advertise iBGP routes to other iBGP peers (its "clients"). To prevent loops, it adds two special attributes:
+A Route Reflector ([RFC 4456](https://datatracker.ietf.org/doc/html/rfc4456)) is a router allowed to re-advertise iBGP routes to other iBGP peers. Its iBGP peers are either *clients* or *non-clients*, and it reflects routes according to where they came from:
+
+*   **From a client:** reflected to all clients and non-clients.
+*   **From a non-client:** reflected to clients only.
+*   **From an eBGP peer:** sent to everyone, as usual.
+
+The clients need no special configuration: they peer with the RR like with any iBGP neighbor. To prevent loops, the RR adds two special attributes:
 1.  **ORIGINATOR_ID:** The Router ID of the router that first sent the route.
 2.  **CLUSTER_LIST:** A list of RRs the route has passed through.
 
@@ -118,9 +124,9 @@ Only the Route Reflector needs special configuration:
 
 ```text
 router bgp 65001
- neighbor 2.2.2.2 remote-as 65001
+ neighbor 10.255.0.2 remote-as 65001
  address-family ipv4 unicast
-  neighbor 2.2.2.2 route-reflector-client
+  neighbor 10.255.0.2 route-reflector-client
 ```
 
 ---
@@ -132,8 +138,8 @@ router bgp 65001
 | **AS Number** | Different | Same |
 | **TTL** | 1 (default) | 255 |
 | **Next-Hop** | Changes to self | Does not change (by default) |
-| **Propagation** | Re-advertises everything | Does not re-advertise iBGP to iBGP |
-| **Loop Prevention** | AS_PATH | Split-Horizon |
+| **Propagation** | Advertises its best paths to every peer | Does not re-advertise iBGP to iBGP (except RRs) |
+| **Loop Prevention** | AS_PATH | Split-Horizon (ORIGINATOR_ID and CLUSTER_LIST with RRs) |
 
 ## Troubleshooting Checklist
 - [ ] Is the `update-source` set to the Loopback?

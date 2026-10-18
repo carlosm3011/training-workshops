@@ -33,6 +33,16 @@ Key topics covered include:
 10. [Lab 3: Multi-Homing and Policy](10-lab-3.md)
 11. [Lab 4: Capstone - The Regional ISP](11-lab-4.md)
 
+## Labs
+
+The labs run FRR routers in Containerlab. Each one lives in `labs/lab-N/`: its topology (`lab-N.clab.yml`), the routers' starting configurations (`configs/`) and the finished ones (`solution/`). Lab 1 explains how to work with them. To check a lab end to end, deploy it and apply the solution:
+
+```sh
+cd labs/lab-2
+sudo containerlab deploy
+../load-solution.sh lab-2
+```
+
 ## References & Further Reading
 
 ### Official Specifications

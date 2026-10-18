@@ -1,0 +1,54 @@
+# Lab 4 - Capstone: The Regional Service Provider.
+#   cd labs/lab-4 && sudo containerlab deploy
+# core1, br-west and br-east (AS 65000) start with their interfaces
+# addressed; everything else in AS 65000 is yours to configure. up1
+# (AS 65001), up2 (AS 65002) and cust-a (AS 65100) are configured, except
+# for the change Task 4 asks you to make on cust-a. solution/ holds the
+# finished configs.
+name: bgp101-lab4
+
+topology:
+  defaults:
+    kind: linux
+    image: quay.io/frrouting/frr:10.7.1
+  nodes:
+    core1:
+      binds:
+        - ../daemons:/etc/frr/daemons:ro
+        - ../vtysh.conf:/etc/frr/vtysh.conf:ro
+        - configs/core1.conf:/etc/frr/frr.conf:ro
+    br-west:
+      binds:
+        - ../daemons:/etc/frr/daemons:ro
+        - ../vtysh.conf:/etc/frr/vtysh.conf:ro
+        - configs/br-west.conf:/etc/frr/frr.conf:ro
+    br-east:
+      binds:
+        - ../daemons:/etc/frr/daemons:ro
+        - ../vtysh.conf:/etc/frr/vtysh.conf:ro
+        - configs/br-east.conf:/etc/frr/frr.conf:ro
+    up1:
+      binds:
+        - ../daemons:/etc/frr/daemons:ro
+        - ../vtysh.conf:/etc/frr/vtysh.conf:ro
+        - configs/up1.conf:/etc/frr/frr.conf:ro
+    up2:
+      binds:
+        - ../daemons:/etc/frr/daemons:ro
+        - ../vtysh.conf:/etc/frr/vtysh.conf:ro
+        - configs/up2.conf:/etc/frr/frr.conf:ro
+    cust-a:
+      binds:
+        - ../daemons:/etc/frr/daemons:ro
+        - ../vtysh.conf:/etc/frr/vtysh.conf:ro
+        - configs/cust-a.conf:/etc/frr/frr.conf:ro
+
+  links:
+    # Internal AS 65000
+    - endpoints: ["core1:eth1", "br-west:eth1"]
+    - endpoints: ["core1:eth2", "br-east:eth1"]
+
+    # External connectivity
+    - endpoints: ["br-west:eth2", "up1:eth1"]
+    - endpoints: ["br-east:eth2", "up2:eth1"]
+    - endpoints: ["core1:eth3", "cust-a:eth1"]

@@ -44,7 +44,7 @@ router bgp 65000
 
 ### Weight (FRR/Cisco Specific)
 *   **Scope:** Local router only (does not pass to iBGP peers).
-*   **Preference:** Higher is better (Default 0).
+*   **Preference:** Higher is better (Default 0 for learned routes, 32768 for routes the router originates).
 *   **Use Case:** Quickly choosing an exit point on a single router with multiple links.
 
 ---
@@ -72,13 +72,15 @@ router bgp 65000
 
 ### The "More-Specific" Trick
 Traffic always follows the **Longest Match**. If you announce `192.0.2.0/24` to ISP-A and `192.0.2.0/25` + `192.0.2.128/25` to ISP-B, all traffic for that range will go to ISP-B, regardless of any other BGP attributes.
+
 *   *Warning:* This contributes to global routing table bloat and should be used sparingly.
+*   *Warning:* Most networks filter prefixes longer than /24 (see "Accepting Routes from Others"), so splitting a /24 into /25s, as in this example, only works with neighbors that accept them. In practice, the trick is used on larger blocks, for example a /23 split into two /24s.
 
 ---
 
 ## 4. BGP Communities: The "Remote Control"
 
-A **Community** is a 32-bit tag (usually written as `ASN:VALUE`) added to a route. It doesn't change path selection by itself, but it can trigger actions on other routers.
+A **Community** ([RFC 1997](https://datatracker.ietf.org/doc/html/rfc1997)) is a 32-bit tag, usually written as `ASN:VALUE` with two 16-bit numbers, added to a route. It doesn't change path selection by itself, but it can trigger actions on other routers. Since a 32-bit ASN doesn't fit in 16 bits, networks with 4-byte ASNs use **Large Communities** ([RFC 8092](https://datatracker.ietf.org/doc/html/rfc8092)), written `ASN:VALUE1:VALUE2`.
 
 ### Standard Communities
 *   **no-export (65535:65281):** "Do not announce this route outside of my AS."
@@ -94,10 +96,11 @@ route-map RM-INTERNAL-ONLY permit 10
 router bgp 65000
  address-family ipv4 unicast
   neighbor 10.0.1.1 route-map RM-INTERNAL-ONLY out
-  neighbor 10.0.1.1 send-community
  exit-address-family
 ```
-*Note: You must explicitly use `send-community` in FRR, or the tags will be stripped before the update is sent!*
+*Note: FRR sends communities to all neighbors by default (you can turn it off with `no neighbor 10.0.1.1 send-community`). Cisco IOS is the opposite: there you must add `neighbor 10.0.1.1 send-community`, or the tags are stripped before the update is sent!*
+
+Lab 4 uses a community to implement Remote Triggered Blackholing for a customer.
 
 ---
 
@@ -114,6 +117,7 @@ When you have multiple attributes set, BGP follows a strict hierarchy (The Best 
 | **Communities** | Both | Variable | N/A |
 
 ### Pro-Tip: The "Soft Reset"
-Remember, whenever you change a `set` command in a route-map, you must trigger a reset to see the effects:
-`clear ip bgp <neighbor> soft out` (for outbound policy)
-`clear ip bgp <neighbor> soft in` (for inbound policy)
+On platforms that don't re-apply policy by themselves, such as Cisco IOS, remember that whenever you change a `set` command in a route-map, you must trigger a reset to see the effects. FRR re-applies it automatically after a few seconds.
+
+*   `clear ip bgp <neighbor> soft out` (for outbound policy)
+*   `clear ip bgp <neighbor> soft in` (for inbound policy)

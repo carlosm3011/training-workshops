@@ -51,19 +51,19 @@ Below follows a list of the most used and important attributes.
 
 * What it is: Defines where the route came from.
 * Values:
-* IGP (0): Interior Gateway Protocol (e.g., via a network command).
-   * EGP (1): Exterior Gateway Protocol (historic, rarely seen).
-   * Incomplete (?): Unknown origin (e.g., redistributed from another protocol).
+   * IGP (`i`, code 0): The route was originated inside the AS, e.g., with a `network` command.
+   * EGP (`e`, code 1): Learned via the Exterior Gateway Protocol (historic, rarely seen).
+   * Incomplete (`?`, code 2): Unknown origin, e.g., redistributed from another protocol.
 
 ### 4. LOCAL_PREF (Well-known Discretionary)
 
 * What it is: A value telling routers within an AS which path is preferred to exit the AS.
-* Role: Higher is better. It is not passed between different Autonomous Systems; it stays internal to your network.
+* Role: Higher is better (default 100). It is only exchanged over iBGP sessions, never sent to eBGP peers; it stays internal to your network.
 
 ### 5. MULTI_EXIT_DISC / MED (Optional Non-transitive)
 
 * What it is: A hint sent to an external neighbor about the preferred entry point into your AS.
-* Role: Lower is better. Unlike Local Pref, this is used to influence inbound traffic from a neighbor.
+* Role: Lower is better. Unlike Local Pref, this is used to influence inbound traffic from a neighbor. It is not passed on beyond the neighboring AS, and by default routers only compare MEDs between paths received from the same neighboring AS.
 
 ### 6. COMMUNITY (Optional Transitive)
 
@@ -77,8 +77,7 @@ The algorithm stops at the first step where one path is clearly superior to the 
 
 ```mermaid {caption="BGP Best Path Selection Hierarchy"}
 flowchart TD
-    START([Start])
- --> W{Weight?}
+    START([Start]) --> W{Weight?}
     W -->|Tie| LP{Local Pref?}
     LP -->|Tie| LO{Locally Originated?}
     LO -->|Tie| AS{AS Path Length?}
@@ -100,28 +99,32 @@ flowchart TD
 
 ### The BGP Best Path Selection Hierarchy
 
-   1. Weight (Cisco specific): Highest weight is preferred. This is local to the router and not advertised to any peers.
+   1. Weight (vendor-specific, supported by Cisco and FRR): Highest weight is preferred. It is not a BGP attribute: it is local to the router and never advertised to any peers.
    2. Local Preference: Highest Local Preference is preferred. This is used to choose the exit point from your local AS.
    3. Locally Originated: Prefer paths that were locally originated (via network or aggregate commands) over those learned from a peer.
    4. AS_PATH Length: Shortest AS_PATH is preferred. Each AS number the route passes through adds "length."
    5. Origin Type: Lowest origin code is preferred: IGP < EGP < Incomplete.
-   6. Multi-Exit Discriminator (MED): Lowest MED is preferred. This is typically used to influence how neighbors enter your AS.
+   6. Multi-Exit Discriminator (MED): Lowest MED is preferred, comparing only paths from the same neighboring AS. This is typically used by a neighbor to influence how you enter its AS.
    7. Neighbor Type: Prefer eBGP paths over iBGP paths.
    8. IGP Metric to Next Hop: Prefer the path with the lowest internal gateway protocol (OSPF/IS-IS/EIGRP) metric to the BGP NEXT_HOP.
 
 ### Tie-Breakers (If everything above is equal)
 
 If the paths are still identical after the main checks, BGP uses these final "last resort" steps:
-9. Oldest Path: Prefer the path that was received first (most stable).
-10. Lowest Router ID: Prefer the path coming from the neighbor with the lowest BGP Router ID.
-11. Lowest Neighbor IP: If multiple sessions exist with the same neighbor, prefer the lowest neighbor IP address.
+
+   9. Oldest Path: For eBGP paths, prefer the one that was received first (the most stable).
+   10. Lowest Router ID: Prefer the path from the neighbor with the lowest BGP Router ID (for reflected routes, the ORIGINATOR_ID is used instead).
+   11. Shortest CLUSTER_LIST: Prefer the path that went through fewer route reflectors.
+   12. Lowest Neighbor IP: If the same router is reachable over several sessions, prefer the path from the lowest neighbor IP address.
+
+The exact list and order vary slightly between implementations. FRR documents its own in the [BGP route selection](https://docs.frrouting.org/en/latest/bgp.html#route-selection) section of its manual, and `show ip bgp <prefix>` tells you why a path won.
 
 ### Pro-Tip: Memory Hook
 A common mnemonic to remember the main steps is **W**e **L**ove **O**range **A**s **O**ur **M**other **E**ats **I**ce-cream:
 
 * Weight
 * Local Pref
-* Originate
+* Originated locally
 * AS_Path
 * Origin Code
 * MED

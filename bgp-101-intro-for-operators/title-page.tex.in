@@ -12,6 +12,13 @@
 \BeforeBeginEnvironment{verbatim}{\begin{minipage}{\linewidth}}
 \AfterEndEnvironment{verbatim}{\end{minipage}}
 
+% Set code blocks in footnotesize, so that FRR's show output (up to
+% ~105 columns) fits the text width instead of running off the page.
+\RecustomVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\},fontsize=\footnotesize}
+\makeatletter
+\renewcommand{\verbatim@font}{\ttfamily\footnotesize}
+\makeatother
+
 % Custom title page addendum: the default LaTeX title block only
 % prints author names, silently dropping the affiliation, and has no
 % notion of a package version or release history. This appends those
