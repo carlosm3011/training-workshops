@@ -1,0 +1,47 @@
+name: bgp101-capstone
+
+topology:
+  nodes:
+    # AS 65000 - Your ISP
+    core1:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    br-west:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    br-east:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+
+    # External Partners
+    up1:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    up2:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    cust-a:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+
+  links:
+    # Internal AS 65000
+    - endpoints: ["core1:eth1", "br-west:eth1"]
+    - endpoints: ["core1:eth2", "br-east:eth1"]
+    
+    # External Connectivity
+    - endpoints: ["br-west:eth2", "up1:eth1"]
+    - endpoints: ["br-east:eth2", "up2:eth1"]
+    - endpoints: ["core1:eth3", "cust-a:eth1"]

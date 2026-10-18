@@ -1,0 +1,38 @@
+name: bgp101-lab3
+
+topology:
+  nodes:
+    # AS 65000 - Your Network
+    r1: # Border-A
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    r2: # Core
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    r4: # Border-B
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+
+    # External Partners
+    isp1: # AS 65001
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    isp2: # AS 65002
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+
+  links:
+    - endpoints: ["isp1:eth1", "r1:eth1"]
+    - endpoints: ["r1:eth2", "r2:eth1"]
+    - endpoints: ["r2:eth2", "r4:eth1"]
+    - endpoints: ["r4:eth2", "isp2:eth1"]

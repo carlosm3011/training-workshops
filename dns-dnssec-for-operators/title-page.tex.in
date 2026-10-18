@@ -12,8 +12,8 @@
 % metadata in _quarto.yml - if you change an author's email, ORCID, or
 % affiliation there, update this block too. The version string and the
 % version-history table are filled in by `make book` (via
-% scripts/generate-title-page.sh) from the Makefile's VERSION variable
-% and `git tag`, respectively - this file (title-page.tex.in) is the
+% scripts/generate-title-page.sh) from this course's Makefile VERSION variable
+% and its git tags, respectively - this file (title-page.tex.in) is the
 % tracked template; the generated title-page.tex (gitignored) is what
 % _quarto.yml actually includes. The history table only lists tags that
 % exist at build time, so the version being built won't list itself

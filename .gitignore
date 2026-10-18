@@ -5,5 +5,7 @@
 
 /.quarto/
 **/*.quarto_ipynb
-/_slides/
-/scripts/title-page.tex
+/*/_slides/
+/*/title-page.tex
+/*/*.qmd
+__pycache__/

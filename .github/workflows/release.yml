@@ -1,9 +1,12 @@
 name: Publish PDF release
 
+# Release tags are per course: <course-dir>/vX.Y.Z (created by
+# `make release` in that course). The PDF is not built here - it is
+# the one committed under <course-dir>/_book/.
 on:
   push:
     tags:
-      - "v*"
+      - "*/v*"
 
 permissions:
   contents: write
@@ -15,12 +18,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find PDF in _book
+      - name: Find PDF in <course>/_book
         id: pdf
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          PDF_PATH=$(find _book -maxdepth 1 -iname "*.pdf" | head -n 1)
+          COURSE="${TAG%%/*}"
+          PDF_PATH=$(find "$COURSE/_book" -maxdepth 1 -iname "*.pdf" | head -n 1)
           if [ -z "$PDF_PATH" ]; then
-            echo "No PDF found under _book" >&2
+            echo "No PDF found under $COURSE/_book" >&2
             exit 1
           fi
           echo "path=$PDF_PATH" >> "$GITHUB_OUTPUT"

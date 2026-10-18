@@ -1,0 +1,23 @@
+name: bgp101-lab2
+
+topology:
+  nodes:
+    r1:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    r2:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+    r3:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - /lib/modules:/lib/modules
+
+  links:
+    - endpoints: ["r1:eth1", "r2:eth1"]
+    - endpoints: ["r1:eth2", "r3:eth1"]

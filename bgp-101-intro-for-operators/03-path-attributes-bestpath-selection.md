@@ -1,0 +1,129 @@
+# Path Attributes and BGP Best Path Selection
+
+## Path Attributes
+
+Path attributes are the "tags" or metadata attached to NLRI (prefixes) within a BGP UPDATE message. BGP uses these attributes to determine the best path to a destination and to detect routing loops.
+
+```mermaid {caption="BGP Path Attribute Categories"}
+graph TD
+    PA[Path Attributes] --> WK[Well-Known]
+    PA --> OP[Optional]
+    
+    WK --> WKM[Mandatory]
+    WK --> WKD[Discretionary]
+    
+    OP --> OPT[Transitive]
+    OP --> OPN[Non-Transitive]
+    
+    WKM --- AS_PATH
+    WKM --- NEXT_HOP
+    WKM --- ORIGIN
+    
+    WKD --- LOCAL_PREF
+    
+    OPT --- COMMUNITY
+    
+    OPN --- MED
+```
+
+They are categorized into four types:
+
+- Well-known Mandatory (must be supported and present), 
+- Well-known Discretionary (must be supported, may be present), 
+- Optional Transitive (passed along even if not understood), 
+- Optional Non-transitive (discarded if not understood).
+
+Attributes are communicated through the UPDATE message and applied by each bgp speaker locally to determine the best paths to each destination.
+
+Below follows a list of the most used and important attributes.
+
+### 1. AS_PATH (Well-known Mandatory)
+
+* What it is: A list of all Autonomous System numbers a route has passed through.
+* Role: It is used for loop prevention (if a router sees its own AS in the list, it drops the update) and path selection (shorter AS_PATHs are generally preferred).
+
+### 2. NEXT_HOP (Well-known Mandatory)
+
+* What it is: The IP address of the router used to reach the advertised prefixes.
+* Role: For eBGP, this is typically the IP of the neighbor; for iBGP, it usually remains the IP of the original eBGP exit point unless "next-hop-self" is configured.
+
+### 3. ORIGIN (Well-known Mandatory)
+
+* What it is: Defines where the route came from.
+* Values:
+* IGP (0): Interior Gateway Protocol (e.g., via a network command).
+   * EGP (1): Exterior Gateway Protocol (historic, rarely seen).
+   * Incomplete (?): Unknown origin (e.g., redistributed from another protocol).
+
+### 4. LOCAL_PREF (Well-known Discretionary)
+
+* What it is: A value telling routers within an AS which path is preferred to exit the AS.
+* Role: Higher is better. It is not passed between different Autonomous Systems; it stays internal to your network.
+
+### 5. MULTI_EXIT_DISC / MED (Optional Non-transitive)
+
+* What it is: A hint sent to an external neighbor about the preferred entry point into your AS.
+* Role: Lower is better. Unlike Local Pref, this is used to influence inbound traffic from a neighbor.
+
+### 6. COMMUNITY (Optional Transitive)
+
+* What it is: A numerical tag used to group routes for administrative purposes.
+* Role: Used to trigger specific routing policies (e.g., "don't advertise this to Peer X" or "set Local Pref to 200").
+
+## BGP Best Path Selection Algorithm
+
+BGP routers often receive multiple paths to the same destination. To pick the single "best" path to install in the routing table, BGP follows a strict, step-by-step tie-breaker list.
+The algorithm stops at the first step where one path is clearly superior to the others.
+
+```mermaid {caption="BGP Best Path Selection Hierarchy"}
+flowchart TD
+    START([Start])
+ --> W{Weight?}
+    W -->|Tie| LP{Local Pref?}
+    LP -->|Tie| LO{Locally Originated?}
+    LO -->|Tie| AS{AS Path Length?}
+    AS -->|Tie| OC{Origin Code?}
+    OC -->|Tie| MED{MED?}
+    MED -->|Tie| NT{Neighbor Type eBGP > iBGP?}
+    NT -->|Tie| MET{IGP Metric to NH?}
+    MET -->|Tie| TB[Tie-Breakers]
+    
+    W -->|Highest| WIN([WINNER])
+    LP -->|Highest| WIN
+    LO -->|Yes| WIN
+    AS -->|Shortest| WIN
+    OC -->|Lowest| WIN
+    MED -->|Lowest| WIN
+    NT -->|eBGP| WIN
+    MET -->|Lowest| WIN
+```
+
+### The BGP Best Path Selection Hierarchy
+
+   1. Weight (Cisco specific): Highest weight is preferred. This is local to the router and not advertised to any peers.
+   2. Local Preference: Highest Local Preference is preferred. This is used to choose the exit point from your local AS.
+   3. Locally Originated: Prefer paths that were locally originated (via network or aggregate commands) over those learned from a peer.
+   4. AS_PATH Length: Shortest AS_PATH is preferred. Each AS number the route passes through adds "length."
+   5. Origin Type: Lowest origin code is preferred: IGP < EGP < Incomplete.
+   6. Multi-Exit Discriminator (MED): Lowest MED is preferred. This is typically used to influence how neighbors enter your AS.
+   7. Neighbor Type: Prefer eBGP paths over iBGP paths.
+   8. IGP Metric to Next Hop: Prefer the path with the lowest internal gateway protocol (OSPF/IS-IS/EIGRP) metric to the BGP NEXT_HOP.
+
+### Tie-Breakers (If everything above is equal)
+
+If the paths are still identical after the main checks, BGP uses these final "last resort" steps:
+9. Oldest Path: Prefer the path that was received first (most stable).
+10. Lowest Router ID: Prefer the path coming from the neighbor with the lowest BGP Router ID.
+11. Lowest Neighbor IP: If multiple sessions exist with the same neighbor, prefer the lowest neighbor IP address.
+
+### Pro-Tip: Memory Hook
+A common mnemonic to remember the main steps is **W**e **L**ove **O**range **A**s **O**ur **M**other **E**ats **I**ce-cream:
+
+* Weight
+* Local Pref
+* Originate
+* AS_Path
+* Origin Code
+* MED
+* External (eBGP)
+* IGP metric

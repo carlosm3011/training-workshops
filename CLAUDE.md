@@ -4,47 +4,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Context
 
-"DNS y DNSSEC para Operadores" — a LACNIC Training course aimed at small/medium network operators (ISPs, IXPs, small TLDs, universities), covering DNSSEC hands-on: signing, validation, key management (KASP in BIND), and troubleshooting. All content is written in **Spanish**; keep new prose in Spanish.
+A container for LACNIC Training courses/workshops. Each course lives in its own top-level directory and produces two outputs from the same Markdown sources: a PDF book (Quarto) and one slide deck per module (python-pptx). The build machinery is shared at the repo root; course directories hold only content and a small config Makefile. Each course has its own `CLAUDE.md` with content-specific guidance.
 
-Two outputs are built from the same sources: a PDF book (Quarto) and one slide deck per module (python-pptx). All 7 modules are drafted and released; content, slides, and PDF should be kept in sync when a module changes.
+Courses: `dns-dnssec-for-operators/` (the first one; its v0.6.x releases predate this layout).
 
 ## Commands
 
 ```sh
-make help      # list targets (default)
-make deps      # macOS only: Quarto (brew), TinyTeX, chrome-headless-shell, python-pptx
-make book      # render _book/DNS-y-DNSSEC-para-Operadores.pdf
-make slides    # rebuild all 7 decks into _slides/
-make clean     # remove _book/, .quarto/, stray .qmd and *-wip.pptx files
-make release   # commit -a, push, tag $(VERSION), push tag
+make deps                                       # macOS only: Quarto (brew), TinyTeX, chrome-headless-shell, python-pptx
+make courses                                    # list course directories
+make book    COURSE=dns-dnssec-for-operators    # same as: make -C dns-dnssec-for-operators book
+make slides  COURSE=dns-dnssec-for-operators
+make clean   COURSE=dns-dnssec-for-operators
+make release COURSE=dns-dnssec-for-operators    # commit course changes, push, tag <course>/$(VERSION), push tag
+make -C <course> help
 ```
 
-Rebuild a single deck (what `make slides` does per module):
+Rebuild a single deck (what `make slides` does per module), from inside a course directory:
 
 ```sh
-cp _templates/lacnic46.pptx scripts/slides/
-cd scripts/slides && python3 build_module04.py   # writes 04-Firmando-con-BIND-y-KASP-wip.pptx
-mv 04-Firmando-con-BIND-y-KASP-wip.pptx ../../_slides/04-Firmando-con-BIND-y-KASP.pptx
-rm lacnic46.pptx
+cp ../_templates/lacnic46.pptx slides/
+(cd slides && PYTHONPATH=../../scripts/slides python3 build_module04.py)   # writes slides/<module>-wip.pptx
+mv slides/04-*-wip.pptx _slides/04-Firmando-con-BIND-y-KASP.pptx && rm slides/lacnic46.pptx
 ```
 
-There are no tests or linters. QA for decks is: render with LibreOffice and inspect page by page for overflow, leftover placeholder text, and template validity.
+There are no tests or linters. QA for decks: render with LibreOffice and inspect page by page for overflow, leftover placeholder text, and template validity.
+
+## Layout
+
+- **Shared**: `mk/course.mk` (all book/slides/release/clean rules), root `Makefile` (deps + `COURSE=` delegation), `scripts/*.sh` (each takes the course dir as an argument), `scripts/slides/deck_helpers.py`, `_templates/*.pptx`, `.github/workflows/release.yml`.
+- **Per course** (`<course>/`): chapter `.md` files, `_quarto.yml`, `title-page.tex.in`, `Makefile` (sets `VERSION`, `BOOK_PDF_NAME`, `SLIDE_MODULES`, optional `SLIDE_TEMPLATE`/`EXTRA_TAG_PATTERN`, then `include ../mk/course.mk`), `slides/build_moduleNN.py`, committed `_book/*.pdf`, gitignored `_slides/`.
+- The course name is its directory name; `course.mk` derives it from `$(CURDIR)`, so courses must be top-level directories. The root Makefile discovers courses as `*/Makefile`.
+
+To add a course: copy an existing course's `Makefile`, `_quarto.yml` and `title-page.tex.in` into a new top-level directory, change the version/title/authors/chapters, and add `slides/build_moduleNN.py` scripts that `from deck_helpers import ...`.
 
 ## Book pipeline (why `make book`, never bare `quarto render`)
 
-- Chapters are authored as plain Obsidian-compatible `.md` files at the repo root (`index.md` + `01-…` through `07-…`), using ```` ```mermaid ```` fences.
-- Quarto only executes `{mermaid}` cells in `.qmd` files, so `_quarto.yml`'s `chapters:` list points at `.qmd` names that **don't exist in the repo**. `scripts/mermaid-pre-render.sh` generates disposable `.qmd` twins (rewriting the fences), `quarto render` runs, then `scripts/mermaid-post-render.sh` deletes them. This can't live in a Quarto pre-render hook (quarto-cli#11567). Never edit or commit `.qmd` files.
-- Adding a chapter means adding its `.qmd` name to `_quarto.yml` (and to `SLIDE_MODULES` in the Makefile if it gets a deck). Both scripts skip `CLAUDE.md`, and the Makefile excludes it from `MD_FILES`.
-- `scripts/generate-title-page.sh` produces the gitignored `scripts/title-page.tex` from `scripts/title-page.tex.in`, substituting `@@VERSION@@` and a release-history table from `git tag`. Author details are hardcoded in `title-page.tex.in` **and** in `_quarto.yml` — change both together.
+- Chapters are plain Obsidian-compatible `.md` files using ```` ```mermaid ```` fences. Quarto only executes `{mermaid}` cells in `.qmd` files, so each `_quarto.yml` `chapters:` list names `.qmd` files that **don't exist in the repo**: `scripts/mermaid-pre-render.sh` generates disposable twins, `quarto render` runs in the course dir, then `scripts/mermaid-post-render.sh` deletes them. A Quarto pre-render hook can't do this (quarto-cli#11567). Never edit or commit `.qmd` files. `CLAUDE.md` is skipped by both scripts and excluded from the book's dependencies.
+- `scripts/generate-title-page.sh` writes the gitignored `<course>/title-page.tex` from `title-page.tex.in`, substituting `@@VERSION@@` and a version-history table built from the course's `<course>/v*` tags (prefix stripped), plus `EXTRA_TAG_PATTERN` if set. Author details are hardcoded in `title-page.tex.in` **and** in `_quarto.yml`, so change both together.
 
 ## Versioning and release
 
-- The version lives only in the Makefile's `VERSION` variable (there is no VERSION file). Bump it, run `make book`, then `make release`.
-- `_book/*.pdf` **is committed**: `.github/workflows/` publishes a GitHub release on `v*` tag push by attaching the PDF already in `_book/` — CI does not build it. So the PDF must be rebuilt and committed before tagging.
+- A course's version lives only in its Makefile's `VERSION`. Bump it, `make book`, then `make release`; `make release` only commits changes under that course directory.
+- Tags are `<course>/vX.Y.Z`. The workflow fires on `*/v*`, takes the course from the tag, and attaches the PDF **already committed** in `<course>/_book/`. CI does not build it, so rebuild and commit the PDF before tagging.
 
 ## Slide decks
 
-- **Template**: `_templates/lacnic46.pptx` (LACNIC Google Slides export), committed deliberately so `make slides` works from a fresh clone. Layouts: TITLE, TITLE_1, TITLE_AND_BODY, TITLE_AND_TWO_COLUMNS, TITLE_ONLY, ONE_COLUMN_TEXT, MAIN_POINT, SECTION_TITLE_AND_DESCRIPTION, CAPTION_ONLY, BIG_NUMBER, BLANK, plus a closing "¡Gracias!" slide. Brand red `C53425`; font Arial (safe for LibreOffice rendering).
-- **Output**: `_slides/NN-Name.pptx` is gitignored build output.
-- **Scripts**: `scripts/slides/deck_helpers.py` holds shared primitives (placeholders/bullets, code blocks, native tables, box-and-arrow diagrams, `move_slide_to_end` for the closing slide). Each `build_moduleNN.py` loads `lacnic46.pptx` from its **own working directory** and saves `<module>-wip.pptx` there — hence the copy/move dance in the Makefile. Modules 02–07 import `deck_helpers`; `build_module01.py` predates it and inlines its own copies of the helpers.
-- **Conventions**: each deck mirrors its module's headings (intro/agenda, one section per heading, closing summary table, "¡Gracias!"). Vary layouts instead of defaulting to bullets: custom diagrams for anything that is a mermaid graph in the `.md`, native tables for reference/summary content, two-column layouts for compare/contrast. Module 7 is the densest (23 slides).
+- Templates in `_templates/` are committed on purpose, so `make slides` works from a fresh clone. `lacnic46.pptx` is the LACNIC Google Slides export. Its layouts are TITLE, TITLE_1, TITLE_AND_BODY, TITLE_AND_TWO_COLUMNS, TITLE_ONLY, ONE_COLUMN_TEXT, MAIN_POINT, SECTION_TITLE_AND_DESCRIPTION, CAPTION_ONLY, BIG_NUMBER and BLANK, plus a closing "¡Gracias!" slide. Brand red is `C53425`; the font is Arial, which is safe for LibreOffice rendering.
+- `course.mk` copies the template into `<course>/slides/` and runs each `build_moduleNN.py` there with `PYTHONPATH` set to `scripts/slides`. Each script loads the template by bare filename from its working directory and saves `<module>-wip.pptx`, which is then moved to `_slides/<module>.pptx`. `<module>` must start with the `NN` used in the script name.
+- `deck_helpers.py` provides placeholder/bullet setters, code blocks, native tables, box-and-arrow diagrams, and `move_slide_to_end` for the closing slide.
+- Deck conventions: mirror the module's headings (intro/agenda, one section per heading, a closing summary table, "¡Gracias!"). Vary the layouts instead of defaulting to bullets: build custom diagrams for anything that is a mermaid graph in the `.md`, use native tables for reference/summary content, and use two-column layouts for compare/contrast.
