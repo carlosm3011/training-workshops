@@ -48,7 +48,7 @@ To add a course: copy an existing course's `Makefile`, `_quarto.yml` and `title-
 
 ## Versioning and release
 
-- A course's version lives only in its Makefile's `VERSION`. Bump it, `make book`, then `make release`; `make release` only commits changes under that course directory.
+- A course's version lives only in its Makefile's `VERSION`. Bump it, `make book`, then `make release`; `make release` commits every change under that course directory, untracked files included (it runs `git add -A` there first; generated files are gitignored), and nothing outside it.
 - Tags are `<course>/vX.Y.Z`. The workflow fires on `*/v*`, takes the course from the tag, and attaches every PDF **already committed** under `<course>/_book/`, including subdirectories. CI does not build them, so rebuild and commit the PDFs before tagging.
 
 ## Slide decks

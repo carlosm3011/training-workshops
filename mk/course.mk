@@ -66,7 +66,8 @@ help:
 	@echo "               via slides/build_moduleNN.py into $(SLIDE_OUT_DIR)/."
 	@echo "               Requires python-pptx."
 	@echo " "
-	@echo "  make release Commit this course's tracked changes, push, tag $(TAG),"
+	@echo "  make release Commit all changes in this course (new files included),"
+	@echo "               push, tag $(TAG),"
 	@echo "               and push the tag (CI then publishes the _book/ PDFs)."
 	@echo " "
 	@echo "  make clean   Remove _book/, .quarto/, stray .qmd files, the generated"
@@ -103,7 +104,11 @@ slides:
 	rm -f $(SLIDE_SCRIPTS_DIR)/$(SLIDE_TEMPLATE)
 	@echo "==> Done: $(COURSE)/$(SLIDE_OUT_DIR)/*.pptx rebuilt"
 
+# `git add` first so new files (e.g. a new lab directory) make it into the
+# release; generated files are gitignored. The commit may be a no-op when
+# everything was committed beforehand.
 release:
+	git add -A -- .
 	-git commit -m "$(COURSE): new release $(VERSION)" -- .
 	git push
 	git tag $(TAG)
