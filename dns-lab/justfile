@@ -195,11 +195,14 @@ test-master: build
     ! printf 'update add %s\nsend\n' "$fake" | m nsupdate >/dev/null 2>&1 \
         && ok "unsigned update refused" || fail "unsigned update accepted"
 
-    # 6. a group signs its zone and publishes its DS: validated; wrong DS: SERVFAIL
+    # 6. a group signs its zone and publishes its DS: validated; wrong DS: SERVFAIL.
+    # As in modules 3-4: group01-0 signs, group01-1 and -2 are secondaries,
+    # so every server the delegation points to answers for the zone.
     x -i group01-0 bash -s <<'EOF'
     set -e
     cat >> /etc/bind/named.conf.local <<'C'
-    zone "group01.lab" { type primary; file "/var/lib/bind/db.group01.lab"; dnssec-policy default; inline-signing yes; };
+    zone "group01.lab" { type primary; file "/var/lib/bind/db.group01.lab"; dnssec-policy default; inline-signing yes;
+        allow-transfer { 10.53.1.0/24; }; also-notify { 10.53.1.11; 10.53.1.12; }; };
     C
     cat > /var/lib/bind/db.group01.lab <<'Z'
     $TTL 60
@@ -220,23 +223,39 @@ test-master: build
         [ -n "$ds" ] && break; sleep 1
     done
     [ -n "$ds" ] || fail "group01-0 didn't sign group01.lab."
+    for n in 1 2; do
+        printf 'zone "group01.lab" { type secondary; primaries { 10.53.1.10; }; file "/var/cache/bind/db.group01.lab"; };\n' \
+            | x -i group01-$n tee -a /etc/bind/named.conf.local >/dev/null
+        x group01-$n rndc reconfig
+    done
+    want=$(x group01-0 dig +short +norec @127.0.0.1 group01.lab. SOA | awk '{print $3}')
+    for n in 1 2; do
+        for _ in $(seq 30); do
+            [ "$(x group01-$n dig +short +norec @127.0.0.1 group01.lab. SOA | awk '{print $3}')" = "$want" ] && break; sleep 1
+        done
+        x group01-$n dig +norec @127.0.0.1 group01.lab. DNSKEY | grep -q DNSKEY || fail "group01-$n didn't transfer group01.lab."
+    done
+    ok "group01-0 signs group01.lab.; group01-1 and -2 serve it as secondaries"
     printf 'update add %s\nsend\n' "$(echo "$ds" | sed 's/ IN / 60 IN /')" | update
     out=$(x group01-0 dig @{{master4}} www.group01.lab. A +dnssec)
     echo "$out" | flags | grep -qw ad && ok "with the DS published, www.group01.lab. validates (ad)" \
         || fail "group01.lab. not validated: $(echo "$out" | grep -E 'status|flags')"
-    x group01-0 delv-lab @{{master4}} group01.lab. SOA 2>&1 | grep -q 'fully validated' \
-        && ok "delv-lab: group01.lab. SOA fully validated" || fail "delv-lab didn't validate group01.lab."
+    out=$(x group01-0 delv-lab @{{master4}} group01.lab. SOA 2>&1 || true)
+    echo "$out" | grep -q 'fully validated' \
+        && ok "delv-lab: group01.lab. SOA fully validated" || fail "delv-lab didn't validate group01.lab.: $out"
     anchor=$(cat "$root/shared/lab-anchor.conf")
     docker restart {{master_name}} >/dev/null; just _wait_resolver
     [ "$(cat "$root/shared/lab-anchor.conf")" = "$anchor" ] \
         && x group01-0 dig @{{master4}} www.group01.lab. A +dnssec | flags | grep -qw ad \
         && ok "after a master restart, the DS and lab.'s trust anchor are unchanged and it still validates" \
         || fail "master restart lost the DS or changed the anchor"
-    wrong=$(echo "$ds" | awk '{ $NF = "00" substr($NF, 3); print }' | sed 's/ IN / 60 IN /')
+    # Same key tag and algorithm, digest replaced: a typo at the registrar.
+    wrong=$(echo "$ds" | awk '{ $NF = sprintf("%064d", 0); print }' | sed 's/ IN / 60 IN /')
     printf 'update delete group01.lab. DS\nupdate add %s\nsend\n' "$wrong" | update
     m rndc flushtree group01.lab. resolver
-    x group01-0 dig @{{master4}} www.group01.lab. A | grep -q 'status: SERVFAIL' \
-        && ok "with a wrong DS, www.group01.lab. is SERVFAIL" || fail "wrong DS didn't break validation"
+    out=$(x group01-0 dig @{{master4}} www.group01.lab. A)
+    echo "$out" | grep -q 'status: SERVFAIL' && ok "with a wrong DS, www.group01.lab. is SERVFAIL" \
+        || fail "wrong DS didn't break validation: $(echo "$out" | grep -E 'status|flags'); DS in lab.: $(x group01-0 dig +short +norec @{{master4}} group01.lab. DS)"
     echo "all master checks passed"
 
 # Create the internal dns-lab network and the master's uplink, if missing.
