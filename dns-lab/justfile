@@ -265,7 +265,7 @@ test-master: build
         || fail "wrong DS didn't break validation: $(echo "$out" | grep -E 'status|flags'); DS in lab.: $(x group01-0 dig +short +norec @{{master4}} group01.lab. DS)"
     echo "all master checks passed"
 
-# Bring up master, groups 1-2 and the web page; check login, visibility, controls and authorization; tear down.
+# Bring up master, groups 1-2 and the web page; check login, controls, terminals and authorization; tear down.
 test-web: build
     #!/usr/bin/env bash
     set -euo pipefail
@@ -344,6 +344,10 @@ test-web: build
     api group01 GET /api/nodes >/dev/null
     [ "$(cat "$tmp/status")" = 401 ] && ok "after logout, the API answers 401" || fail "session survives logout"
     [ "$(curl -s -o /dev/null -w '%{http_code}' "$url/")" = 303 ] && ok "page redirects to login without a session" || fail "page open without login"
+
+    # Terminals (#9): driven over the websocket from inside the web container
+    docker exec -i -e PW_GROUP01="$(pass group01)" -e PW_GROUP02="$(pass group02)" -e PW_INSTRUCTOR="$(pass instructor)" \
+        {{web_name}} python - < web/tests/terminal_check.py | grep -v '^all terminal'
     echo "all web checks passed"
 
 # Create the internal dns-lab network and the master's uplink, if missing.
