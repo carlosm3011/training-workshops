@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Ingresar · Laboratorio DNS{% endblock %}
+{% block main %}
+<form class="login" method="post" action="/login">
+  <h2>Ingresar</h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <label>Usuario
+    <input name="username" autocomplete="username" placeholder="group01" required autofocus>
+  </label>
+  <label>Contraseña
+    <input name="password" type="password" autocomplete="current-password" required>
+  </label>
+  <button type="submit">Ingresar</button>
+</form>
+{% endblock %}

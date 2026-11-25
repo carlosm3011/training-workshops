@@ -31,6 +31,11 @@ master6 := "fd53::1"
 node_image := "dnslab-node"
 master_image := "dnslab-master"
 master_name := "dnslab-master"
+web_image := "dnslab-web"
+web_name := "dnslab-web"
+# The web app listens on the host's loopback only; Caddy (#11) will be the
+# public entry point. Until then, reach it with an SSH tunnel.
+web_port := "8080"
 # systemd as PID 1 without --privileged: images/node/dnslab-init.sh
 # remounts the container's own cgroup subtree read-write, which needs
 # SYS_ADMIN and no AppArmor profile. NET_ADMIN lets dnslab-net set the
@@ -74,13 +79,15 @@ status: _check
     @echo "(container states: not implemented yet, see #5)"
 
 # Print the web page's group and instructor passwords.
-credentials: _check
-    @echo "credentials (not implemented yet, see #5) would print {{state}}/credentials"
+credentials:
+    @[ -r "{{state}}/credentials" ] && cat "{{state}}/credentials" \
+        || { echo "No credentials yet: {{state}}/credentials is created by 'just init'." >&2; exit 1; }
 
 # Build the lab images.
 build:
     docker build -t {{node_image}} images/node
     docker build -t {{master_image}} images/master
+    docker build -t {{web_image}} web
 
 # Bring up the network, the master and groups 1-2, check addressing and routing, tear down.
 test-net: build
@@ -258,6 +265,87 @@ test-master: build
         || fail "wrong DS didn't break validation: $(echo "$out" | grep -E 'status|flags'); DS in lab.: $(x group01-0 dig +short +norec @{{master4}} group01.lab. DS)"
     echo "all master checks passed"
 
+# Bring up master, groups 1-2 and the web page; check login, visibility, controls and authorization; tear down.
+test-web: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="{{state}}/test"
+    nodes=(group01-0 group01-1 group01-2 group02-0 group02-1 group02-2)
+    if docker network inspect {{network}} >/dev/null 2>&1 || docker container inspect {{web_name}} >/dev/null 2>&1; then
+        echo "A {{network}} environment or {{web_name}} already exists on this host; test-web needs them absent." >&2; exit 1
+    fi
+    tmp=$(mktemp -d)
+    cleanup() {
+        docker rm -f {{web_name}} {{master_name}} "${nodes[@]}" >/dev/null 2>&1 || true
+        docker network rm {{network}} {{uplink}} >/dev/null 2>&1 || true
+        sudo rm -rf "$root" "$tmp"
+    }
+    trap cleanup EXIT
+    cleanup; mkdir -p "$tmp"
+    just _network
+    just groups=2 _master "$root"
+    for g in 1 2; do for n in 0 1 2; do just _node "$root" $g $n; done; done
+    for c in "${nodes[@]}"; do just _wait "$c"; done
+    just groups=2 _credentials "$root"
+    just _web "$root"
+    ok() { echo "ok   $*"; }
+    fail() { echo "FAIL $*" >&2; exit 1; }
+    url=http://127.0.0.1:{{web_port}}
+    pass() { awk -v u="$1" '$1 == u { print $2 }' "$root/credentials"; }
+    # login USER PASSWORD -> HTTP status; cookies in $tmp/USER
+    login() { curl -s -o /dev/null -w '%{http_code}' -c "$tmp/$1" -b "$tmp/$1" --data-urlencode "username=$1" --data-urlencode "password=$2" "$url/login"; }
+    # api USER METHOD PATH -> body; status in $tmp/status
+    api() { curl -s -o "$tmp/body" -w '%{http_code}' -b "$tmp/$1" -X "$2" "$url$3" > "$tmp/status"; cat "$tmp/body"; }
+    names() { python3 -c 'import json, sys; print(" ".join(n["name"] for n in json.load(sys.stdin)["nodes"]))'; }
+    state_of() { api "$1" GET /api/nodes | python3 -c 'import json, sys; print({n["name"]: n["status"] for n in json.load(sys.stdin)["nodes"]}[sys.argv[1]])' "$2"; }
+
+    [ "$(login group01 wrong-password)" = 401 ] && [ "$(login nobody "$(pass group01)")" = 401 ] \
+        && ok "wrong password or unknown user rejected" || fail "bad login accepted"
+    [ "$(login group01 "$(pass group01)")" = 303 ] && ok "group01 logs in" || fail "group01 can't log in"
+    [ "$(api group01 GET /api/nodes | names)" = "group01-0 group01-1 group01-2" ] \
+        && ok "group01 sees exactly group01-0/1/2" || fail "group01 sees: $(api group01 GET /api/nodes | names)"
+    login instructor "$(pass instructor)" >/dev/null
+    [ "$(api instructor GET /api/nodes | names)" = "{{master_name}} ${nodes[*]}" ] \
+        && ok "instructor sees the master and every node" || fail "instructor sees: $(api instructor GET /api/nodes | names)"
+    api group01 GET /api/nodes | python3 -c 'import json, sys
+    n = json.load(sys.stdin)["nodes"][0]
+    assert (n["name"], n["status"], n["ipv4"], n["ipv6"]) == ("group01-0", "running", "10.53.1.10", "fd53::1:10"), n
+    assert n["uptime"] is not None and n["uptime"] >= 0, n' && ok "node shows state, IPv4, IPv6 and uptime" || fail "node details wrong"
+
+    for target in group02-0 {{master_name}} dnslab-web no-such-node; do
+        api group01 POST "/api/nodes/$target/stop" >/dev/null
+        [ "$(cat "$tmp/status")" = 403 ] || fail "group01 stopping $target got $(cat "$tmp/status")"
+    done
+    [ "$(docker inspect -f '{{{{.State.Status}}' group02-0)" = running ] && [ "$(docker inspect -f '{{{{.State.Status}}' {{master_name}})" = running ] \
+        && ok "group01 gets 403 for another group's node, the master, the web app or unknown names" || fail "a forbidden action ran"
+
+    t0=$(date +%s)
+    api group01 POST /api/nodes/group01-1/stop >/dev/null; [ "$(cat "$tmp/status")" = 200 ] || fail "stop: $(cat "$tmp/status")"
+    [ "$(state_of group01 group01-1)" = exited ] && (( $(date +%s) - t0 <= 5 )) \
+        && ok "Stop: group01-1 shows exited within 5 s ($(( $(date +%s) - t0 )) s)" || fail "stop not reflected"
+    api group01 POST /api/nodes/group01-1/start >/dev/null
+    [ "$(state_of group01 group01-1)" = running ] && ok "Start: group01-1 running again" || fail "start not reflected"
+    before=$(docker inspect -f '{{{{.State.StartedAt}}' group01-1)
+    api group01 POST /api/nodes/group01-1/restart >/dev/null
+    [ "$(state_of group01 group01-1)" = running ] && [ "$(docker inspect -f '{{{{.State.StartedAt}}' group01-1)" != "$before" ] \
+        && ok "Restart: group01-1 restarted and running" || fail "restart not reflected"
+
+    printf 'zone "restart-test.example" { type primary; file "/etc/bind/db.empty"; };\n' \
+        | docker exec -i group01-0 tee -a /etc/bind/named.conf.local >/dev/null
+    api group01 POST /api/nodes/group01-0/restart >/dev/null
+    just _wait group01-0
+    docker exec group01-0 dig +norec @127.0.0.1 restart-test.example SOA | grep -q 'status: NOERROR' \
+        && ok "after editing named.conf.local and Restart, named serves the new zone" || fail "restart didn't apply config"
+
+    api instructor POST /api/nodes/group02-2/restart >/dev/null
+    [ "$(cat "$tmp/status")" = 200 ] && ok "instructor can restart another group's node" || fail "instructor restart: $(cat "$tmp/status")"
+
+    curl -s -o /dev/null -b "$tmp/group01" -c "$tmp/group01" -X POST "$url/logout"
+    api group01 GET /api/nodes >/dev/null
+    [ "$(cat "$tmp/status")" = 401 ] && ok "after logout, the API answers 401" || fail "session survives logout"
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "$url/")" = 303 ] && ok "page redirects to login without a session" || fail "page open without login"
+    echo "all web checks passed"
+
 # Create the internal dns-lab network and the master's uplink, if missing.
 [private]
 _network:
@@ -279,6 +367,7 @@ _master root=state:
         -e DNSLAB_LAB4={{lab4}} -e DNSLAB_RESOLVER=127.0.0.1 -e DNSLAB_GROUPS={{groups}} \
         -v "$dir/etc-bind:/etc/bind" -v "$dir/var-cache-bind:/var/cache/bind" \
         -v "$dir/var-lib-bind:/var/lib/bind" -v "{{root}}/shared:/etc/dnslab" \
+        --label dnslab.role=master \
         {{master_image}} >/dev/null
     docker network connect {{uplink}} {{master_name}}
     docker start {{master_name}} >/dev/null
@@ -309,8 +398,45 @@ _node root g n:
         -e DNSLAB_GW4={{master4}} -e DNSLAB_RESOLVER={{master4}} \
         -v "$dir/etc-bind:/etc/bind" -v "$dir/var-cache-bind:/var/cache/bind" \
         -v "$dir/var-lib-bind:/var/lib/bind" -v "{{root}}/shared:/etc/dnslab:ro" \
+        --label dnslab.role=node --label dnslab.group="${name%-*}" \
         {{node_image}} >/dev/null
     echo "started $name ($a4, $a6)"
+
+# Generate the web page's passwords (instructor + one per group) and its
+# session secret, unless they exist. Passwords are kept in clear text so
+# `just credentials` can print them for handing out.
+[private]
+_credentials root=state:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    umask 077
+    mkdir -p "{{root}}/web"
+    pw() { tr -dc 'abcdefghijkmnpqrstuvwxyz23456789' < /dev/urandom | head -c 12 || true; }
+    if [ ! -e "{{root}}/credentials" ]; then
+        { echo "# Lab web page logins: name password"
+          echo "instructor $(pw)"
+          for g in $(seq 1 {{groups}}); do printf 'group%02d %s\n' "$g" "$(pw)"; done
+        } > "{{root}}/credentials"
+        echo "generated {{root}}/credentials"
+    fi
+    [ -e "{{root}}/web/session-secret" ] || head -c 32 /dev/urandom | base64 > "{{root}}/web/session-secret"
+
+# Start the web page on 127.0.0.1:web_port, with the Docker socket mounted.
+[private]
+_web root=state:
+    @docker run -d --name {{web_name}} --restart unless-stopped \
+        -p 127.0.0.1:{{web_port}}:8000 \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "{{root}}/credentials:/run/dnslab/credentials:ro" \
+        -v "{{root}}/web/session-secret:/run/dnslab/session-secret:ro" \
+        -e DNSLAB_CREDENTIALS=/run/dnslab/credentials \
+        -e DNSLAB_SESSION_SECRET=/run/dnslab/session-secret \
+        -e DNSLAB_NETWORK={{network}} \
+        --label dnslab.role=web \
+        {{web_image}} >/dev/null
+    @for _ in $(seq 30); do curl -fs -o /dev/null http://127.0.0.1:{{web_port}}/login 2>/dev/null && exit 0; sleep 1; done; \
+        echo "{{web_name}}: not answering on 127.0.0.1:{{web_port}} after 30 s" >&2; exit 1
+    @echo "started {{web_name}} (http://127.0.0.1:{{web_port}})"
 
 # Wait up to 30 s for a container's named to be up.
 [private]
