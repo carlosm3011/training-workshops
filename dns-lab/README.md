@@ -4,7 +4,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. Only the justfile skeleton exists so far; the recipes print what they will do.
+> **Status:** in development. The node image is done (`just build`, `just test-node`); the lifecycle recipes still only print what they will do.
 
 ## Usage
 
@@ -17,7 +17,11 @@ just init           # create a new environment
 just credentials    # print the web page's passwords
 just backup         # save every node's config, zones and keys
 just destroy        # back up, then remove the environment completely
+just build          # build the lab images
+just test-node      # boot a throwaway node and check it
 ```
+
+The host also needs [just](https://just.systems) 1.15 or later; Ubuntu 24.04's package (`sudo apt install just`) is enough.
 
 ### Parameters
 
@@ -40,7 +44,7 @@ The command line wins over `.env`, which wins over the defaults.
 ```
 justfile        lifecycle recipes (init, destroy, backup, status, credentials)
 GOAL.md         requirements and design decisions
-images/node/    node image: Ubuntu 24.04, systemd, bind9 (#2)
+images/node/    node image: Ubuntu 24.04, systemd, bind9 (see its README)
 images/master/  master image: NAT gateway, lab. zone, resolver (#4)
 web/            web page, terminals and DS form (#8-#10)
 templates/      config templates rendered by `just init`
