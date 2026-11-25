@@ -43,6 +43,7 @@ Chosen while planning and written into the issues; change them here first if nee
 
 - **Addresses:** network `10.53.0.0/16` and `fd53::/64`. Master `10.53.0.1` / `fd53::1`. Node `groupGG-N` is `10.53.GG.(10+N)` / `fd53::GG:(10+N)`, e.g. `group01-0` is `10.53.1.10` / `fd53::1:10`. This caps the lab at 99 groups (two-digit names).
 - **IPv6** is lab-internal only in M0. Nodes reach the Internet over IPv4 through the master's NAT.
+- **systemd without `--privileged`** (#2): nodes run with `--cap-add SYS_ADMIN --security-opt apparmor=unconfined` and a private cgroup namespace, so the entrypoint can remount the container's own cgroup subtree read-write for systemd. Narrower than `--privileged`, but more than a default container; the alternatives (sysbox, user-namespace remapping) change the host's Docker setup. Details in `images/node/README.md`.
 - **Web app stack:** Python (FastAPI with the Docker SDK) in a container with the Docker socket mounted, not attached to `dns-lab`.
 - **`just destroy`** backs up first and asks for confirmation; it keeps the images unless asked to remove them.
 - **Credentials:** `just init` generates one password per group plus an instructor password, stored on the host in `state/credentials` (mode 600).

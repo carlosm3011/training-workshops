@@ -1,0 +1,14 @@
+[Unit]
+Description=Seed empty BIND bind mounts and the rndc key
+Before=named.service
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dnslab-seed
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=named.service

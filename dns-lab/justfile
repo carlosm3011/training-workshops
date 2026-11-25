@@ -17,6 +17,12 @@ host := env("DNSLAB_HOST", "kobe.labs.lacnic.net")
 network := "dns-lab"
 state := justfile_directory() / "state"
 
+node_image := "dnslab-node"
+# systemd as PID 1 without --privileged: images/node/dnslab-init.sh
+# remounts the container's own cgroup subtree read-write, which needs
+# SYS_ADMIN and no AppArmor profile. See images/node/README.md.
+node_run_flags := "--cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run --tmpfs /run/lock --tmpfs /tmp"
+
 # List the recipes.
 default:
     @just --list --unsorted
@@ -56,6 +62,56 @@ status: _check
 # Print the web page's group and instructor passwords.
 credentials: _check
     @echo "credentials (not implemented yet, see #5) would print {{state}}/credentials"
+
+# Build the lab images.
+build:
+    docker build -t {{node_image}} images/node
+
+# Boot a throwaway node and check it: systemd, bind9, tools, bind mounts, clean stop.
+test-node: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    name=dnslab-test-node
+    dir="{{state}}/test/$name"
+    cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; sudo rm -rf "{{state}}/test"; }
+    trap cleanup EXIT
+    cleanup
+    mkdir -p "$dir"/{etc-bind,var-cache-bind,var-lib-bind}
+    docker run -d --name "$name" --hostname "$name" {{node_run_flags}} \
+        -v "$dir/etc-bind:/etc/bind" -v "$dir/var-cache-bind:/var/cache/bind" \
+        -v "$dir/var-lib-bind:/var/lib/bind" {{node_image}} >/dev/null
+    x() { docker exec "$name" "$@"; }
+    ok() { echo "ok   $*"; }
+    fail() { echo "FAIL $*" >&2; exit 1; }
+    for _ in $(seq 30); do x systemctl is-active -q named 2>/dev/null && break; sleep 1; done
+    [ "$(x systemctl is-system-running || true)" = running ] && ok "systemd running, no failed units" \
+        || { x systemctl --failed; fail "systemd not running cleanly"; }
+    x systemctl is-active -q bind9 && ok "systemctl: bind9 active" || fail "bind9 not active"
+    x journalctl -u named | grep 'running as: named' >/dev/null && ok "journalctl -u named shows named's log" \
+        || fail "no named log in the journal"
+    x rndc status | grep 'server is up' >/dev/null && ok "rndc status" || fail "rndc status"
+    x named-checkconf && ok "named-checkconf" || fail "named-checkconf"
+    for t in dig delv drill dnssec-keygen dnssec-signzone named-checkzone; do
+        x sh -c "command -v $t >/dev/null" || fail "$t missing"
+    done
+    ok "dig delv drill dnssec-keygen dnssec-signzone named-checkzone present"
+    [ "$(x dig +short @127.0.0.1 localhost A)" = 127.0.0.1 ] && ok "named answers queries" || fail "named doesn't answer"
+    [ -s "$dir/etc-bind/named.conf" ] && sudo test -s "$dir/etc-bind/rndc.key" \
+        && ok "empty bind mount seeded, rndc.key generated" || fail "bind mount not seeded"
+    mark="// dnslab test $(date +%s)"
+    echo "$mark" | sudo tee -a "$dir/etc-bind/named.conf.local" >/dev/null
+    [ "$(x tail -1 /etc/bind/named.conf.local)" = "$mark" ] && ok "host edit visible in /etc/bind" || fail "host edit not visible"
+    docker restart "$name" >/dev/null
+    for _ in $(seq 30); do x systemctl is-active -q named 2>/dev/null && break; sleep 1; done
+    [ "$(x tail -1 /etc/bind/named.conf.local)" = "$mark" ] && x systemctl is-active -q named \
+        && ok "edit survives docker restart, named back up" || fail "edit lost or named down after restart"
+    start=$(date +%s)
+    docker stop "$name" >/dev/null
+    took=$(( $(date +%s) - start ))
+    code=$(docker inspect "$name" --format '{{{{.State.ExitCode}}')
+    (( took < 10 )) && [ "$code" = 0 ] && ok "docker stop clean in ${took}s" || fail "stop took ${took}s, exit $code"
+    [ "$(docker inspect "$name" --format '{{{{.HostConfig.Privileged}}')" = false ] && ok "not privileged" || fail "privileged"
+    echo "all node checks passed"
 
 # Fail early on a bad parameter. Two-digit group names and the
 # 10.53.GG.0/24 addressing (GOAL.md) cap the lab at 99 groups.
