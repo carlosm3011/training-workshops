@@ -222,7 +222,7 @@ set_body_bullets(body15, [
 # ---------------------------------------------------------------------------
 s16 = prs.slides.add_slide(layouts["TITLE_ONLY"])
 set_title(s16, "Resumen")
-add_table(s16, Inches(0.3), Inches(1.05), Inches(9.4), Inches(3.9), [
+add_table(s16, Inches(0.3), Inches(1.3), Inches(9.4), Inches(3.65), [
     ("Concepto", "Qué logra"),
     ("allow-query { none; } en el signer", "Su única función de red es firmar y transferir"),
     ("also-notify a ambos públicos", "El signer avisa a los dos servidores públicos"),

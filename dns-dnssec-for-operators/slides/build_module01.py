@@ -450,9 +450,9 @@ chain = [
     "DNSKEY de example.com",
     "RRSIG sobre los registros de example.com",
 ]
-cy = Inches(1.05)
-ch = Inches(0.56)
-cgap = Inches(0.09)
+cy = Inches(1.3)
+ch = Inches(0.5)
+cgap = Inches(0.08)
 cw = Inches(6.0)
 cx = Inches(2.0)
 for i, label in enumerate(chain):

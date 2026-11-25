@@ -49,7 +49,7 @@ set_title(s3, "La mayoría de los incidentes de DNSSEC\nno son ataques. Son firm
 # ---------------------------------------------------------------------------
 s4 = prs.slides.add_slide(layouts["TITLE_ONLY"])
 set_title(s4, "Qué monitorear, y cada cuánto")
-add_table(s4, Inches(0.4), Inches(1.1), Inches(9.2), Inches(4.0), [
+add_table(s4, Inches(0.4), Inches(1.3), Inches(9.2), Inches(3.8), [
     ("Parámetro", "Cómo chequearlo", "Frecuencia"),
     ("Vencimiento del RRSIG más próximo", "dig +dnssec, o un script", "Diario"),
     ("DS del padre vs. DNSKEY vigente", "dig DS + dnssec-dsfromkey", "Semanal / tras rollover de KSK"),
@@ -304,7 +304,7 @@ add_multiline_textbox(s17, Inches(0.4), Inches(3.7), Inches(9.2), Inches(0.9), [
 # ---------------------------------------------------------------------------
 s18 = prs.slides.add_slide(layouts["TITLE_ONLY"])
 set_title(s18, "Tabla de referencia: otros síntomas")
-add_table(s18, Inches(0.3), Inches(1.0), Inches(9.4), Inches(3.9), [
+add_table(s18, Inches(0.3), Inches(1.3), Inches(9.4), Inches(3.6), [
     ("Síntoma", "Causa probable", "Solución"),
     ("Delegación \"lame\"", "NS del padre no coincide con la zona", "Corregir NS/glue en el registrador"),
     ("Falla en algunos resolvers", "TTL viejo del DS/DNSKEY en caché", "Esperar el TTL — es propagación"),

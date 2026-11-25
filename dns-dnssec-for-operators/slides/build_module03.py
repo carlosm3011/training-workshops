@@ -317,7 +317,7 @@ set_body_bullets(body19, [
 # ---------------------------------------------------------------------------
 s20 = prs.slides.add_slide(layouts["TITLE_ONLY"])
 set_title(s20, "Resumen")
-add_table(s20, Inches(0.4), Inches(1.05), Inches(9.2), Inches(4.0), [
+add_table(s20, Inches(0.4), Inches(1.3), Inches(9.2), Inches(3.75), [
     ("Concepto", "Qué logra"),
     ("rndc.key + grupo bind", "Autentica el control local de named"),
     ("controls + rndc.conf", "Habilita y autentica el control remoto de named"),

@@ -54,7 +54,7 @@ set_body_bullets(body3, [
 # ---------------------------------------------------------------------------
 s4 = prs.slides.add_slide(layouts["TITLE_ONLY"])
 set_title(s4, "nsec3param: iterations, salt, opt-out")
-add_table(s4, Inches(0.3), Inches(1.1), Inches(9.4), Inches(3.6), [
+add_table(s4, Inches(0.3), Inches(1.3), Inches(9.4), Inches(3.4), [
     ("Parámetro", "RFC 9276 recomienda", "Por qué"),
     ("iterations", "0", "Más iteraciones = costo de CPU para firmar y validar, con beneficio marginal"),
     ("salt-length", "0 (sin salt)", "No protege contra un atacante que ya puede consultar la zona"),
@@ -327,7 +327,7 @@ set_body_bullets(body20, [
 # ---------------------------------------------------------------------------
 s21 = prs.slides.add_slide(layouts["TITLE_ONLY"])
 set_title(s21, "Resumen")
-add_table(s21, Inches(0.3), Inches(1.0), Inches(9.4), Inches(4.1), [
+add_table(s21, Inches(0.3), Inches(1.3), Inches(9.4), Inches(3.8), [
     ("Concepto", "Qué logra"),
     ("nsec3param iterations 0 optout no salt-length 0", "NSEC3 según RFC 9276 — evita zone walking sin costo extra"),
     ("Estados hidden/rumoured/omnipresent/unretentive", "Determina cuándo KASP avanza un rollover"),
