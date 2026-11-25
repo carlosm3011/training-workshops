@@ -4,7 +4,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. The node and master images, the network and the master's DNS roles are done (`just build`, `just test-node`, `just test-net`, `just test-master`); the lifecycle recipes still only print what they will do.
+> **Status:** in development. Done: the node and master images, the network, the master's DNS roles and the web page's login and controls (`just build` and the `just test-*` recipes). The lifecycle recipes `init`, `backup` and `destroy` still only print what they will do.
 
 ## Usage
 
@@ -21,9 +21,10 @@ just build          # build the lab images
 just test-node      # boot a throwaway node and check it
 just test-net       # bring up master + 2 groups, check addressing and routing, tear down
 just test-master    # bring up master + group01, check lab., the resolver and DS publishing, tear down
+just test-web       # bring up master + 2 groups + web page, check login, controls and authorization, tear down
 ```
 
-`test-net` and `test-master` use the real names (`dns-lab`, `dnslab-master`, `group01-0` …), so it refuses to run while an environment exists.
+The `test-*` recipes (except `test-node`) use the real names (`dns-lab`, `dnslab-master`, `group01-0` …), so it refuses to run while an environment exists.
 
 The host also needs [just](https://just.systems) 1.15 or later; Ubuntu 24.04's package (`sudo apt install just`) is enough.
 
@@ -50,13 +51,14 @@ justfile        lifecycle recipes (init, destroy, backup, status, credentials)
 GOAL.md         requirements and design decisions
 images/node/    node image: Ubuntu 24.04, systemd, bind9 (see its README)
 images/master/  master image: NAT gateway, lab. zone, resolver (see its README)
-web/            web page, terminals and DS form (#8-#10)
+web/            web page: login, node list and controls; terminals and DS form in #9-#10 (see its README)
 templates/      config templates rendered by `just init`
 state/          generated per environment, gitignored:
   nodes/<container>/  each node's bind mount (/etc/bind, /var/cache/bind, /var/lib/bind)
   master/             the master's bind mount, incl. the lab. zone and the web page's TSIG key
   shared/             mounted at /etc/dnslab: lab.'s trust anchor (master rw, nodes ro)
-  credentials         group and instructor passwords (mode 600)
+  credentials         web page logins: instructor and one per group (mode 600)
+  web/session-secret  signs the web page's session cookies
   backups/            tarballs from `just backup`
 ```
 
@@ -90,6 +92,10 @@ Directories marked with an issue number are created by that issue.
 - All nodes share one subnet, so groups can reach each other's nodes directly.
 - Each group's zone is `groupNN.lab.`, delegated from the master's `lab.` zone to `ns0`, `ns1` and `ns2.groupNN.lab.`, the group's three nodes in order. Students publish their DS in `lab.` through the web page (#10).
 - The master's resolver validates `lab.` names with `lab.`'s own trust anchor. `dig` shows the `ad` flag as usual; for `delv`, use the nodes' `delv-lab` wrapper (see [images/node](images/node/README.md)).
+
+## Web page
+
+`dnslab-web` listens on `127.0.0.1:8080` on the lab host; until Caddy is in front of it (#11), use an SSH tunnel (`ssh -N -L 8080:127.0.0.1:8080 <host>`). Groups log in with the passwords from `just credentials` and see only their own nodes; the instructor sees everything. See [web/README.md](web/README.md).
 
 ## DNS names in the lab
 

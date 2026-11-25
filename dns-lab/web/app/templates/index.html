@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block header %}
+<div class="who">
+  <span>{{ "Instructor" if user == "instructor" else user }}</span>
+  <form method="post" action="/logout"><button type="submit" class="link">Salir</button></form>
+</div>
+{% endblock %}
+{% block main %}
+<p class="hint">
+  Después de cambiar la configuración, usá <code>rndc reload</code> o
+  <code>systemctl restart bind9</code> dentro del nodo. «Reiniciar» reinicia
+  el contenedor completo; también sirve para recuperar un nodo roto.
+</p>
+<table id="nodes">
+  <thead>
+    <tr><th>Nodo</th><th>Estado</th><th>IPv4</th><th>IPv6</th><th>Activo hace</th><th></th></tr>
+  </thead>
+  <tbody><tr><td colspan="6" class="muted">Cargando…</td></tr></tbody>
+</table>
+<p id="message" class="error" hidden></p>
+<script src="/static/app.js"></script>
+{% endblock %}
