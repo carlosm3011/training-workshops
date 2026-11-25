@@ -1,0 +1,14 @@
+[Unit]
+Description=Generate the master's lab. zone, views and web page key
+After=dnslab-seed.service
+Requires=dnslab-seed.service
+Before=named.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dnslab-master-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=named.service

@@ -1,0 +1,12 @@
+[Unit]
+Description=Publish lab.'s trust anchor for the resolver and the nodes
+After=named.service
+Requires=named.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dnslab-lab-anchor
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

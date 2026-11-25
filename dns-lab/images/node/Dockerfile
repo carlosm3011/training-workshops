@@ -38,6 +38,7 @@ RUN rm -f /etc/bind/rndc.key \
 COPY dnslab-init.sh /usr/local/sbin/dnslab-init
 COPY dnslab-seed.sh /usr/local/sbin/dnslab-seed
 COPY dnslab-net.sh /usr/local/sbin/dnslab-net
+COPY --chmod=755 delv-lab.sh /usr/local/bin/delv-lab
 COPY dnslab-seed.service dnslab-net.service /etc/systemd/system/
 RUN chmod 755 /usr/local/sbin/dnslab-init /usr/local/sbin/dnslab-seed /usr/local/sbin/dnslab-net \
  && systemctl enable dnslab-seed.service dnslab-net.service named.service

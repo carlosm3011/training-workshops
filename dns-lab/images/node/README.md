@@ -43,6 +43,16 @@ The `dns-lab` network is internal: Docker gives nodes no default route and point
 
 systemd services don't inherit the container's environment, so the script reads PID 1's. Nodes have no IPv6 default route: IPv6 is lab-internal in M0.
 
+## Validating lab. names with delv
+
+`lab.` isn't in the real root, so `delv`'s built-in root anchor can't validate it. The master publishes `lab.`'s trust anchor in `/etc/dnslab/lab-anchor.conf`, mounted read-only on every node, and the image has a wrapper:
+
+```sh
+delv-lab @10.53.0.1 group01.lab. SOA      # = delv -a /etc/dnslab/lab-anchor.conf +root=lab …
+```
+
+Where the course runs `delv @127.0.0.1 example.com A`, students run `delv-lab` on their `groupNN.lab.` names. `dig` needs nothing special: the master's resolver validates and sets the `ad` flag.
+
 ## Run flags
 
 ```sh
@@ -52,6 +62,7 @@ docker run -d --name group01-0 --hostname group01-0 \
   --network dns-lab --ip 10.53.1.10 --ip6 fd53::1:10 \
   -e DNSLAB_GW4=10.53.0.1 -e DNSLAB_RESOLVER=10.53.0.1 \
   -v …/etc-bind:/etc/bind -v …/var-cache-bind:/var/cache/bind -v …/var-lib-bind:/var/lib/bind \
+  -v …/shared:/etc/dnslab:ro \
   dnslab-node
 ```
 
@@ -67,4 +78,5 @@ This is much narrower than `--privileged`: no host devices, the default seccomp 
 
 - named isn't confined by AppArmor in the container, so module 3's note about AppArmor restricting named's directories doesn't reproduce here.
 - There is no network configuration inside the node: Docker assigns the addresses, and `dnslab-net` sets the route and resolver.
-- Container names don't resolve between nodes: `/etc/resolv.conf` points at the master, not Docker's embedded DNS. Use addresses, or the lab's own names once #4 is in.
+- Container names don't resolve between nodes: `/etc/resolv.conf` points at the master, not Docker's embedded DNS. Use addresses, or the lab's own names (`ns0.group01.lab.` …).
+- `delv` on `lab.` names needs `delv-lab` (above).
