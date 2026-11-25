@@ -31,7 +31,10 @@
 # bare `quarto render`.)
 
 ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
-COURSE   := $(notdir $(CURDIR))
+# override: `make book COURSE=<course>/` from the root passes COURSE down
+# as a command-line variable (with tab completion's trailing slash),
+# which would otherwise win over this and yield tags like <course>//vX.
+override COURSE := $(notdir $(CURDIR))
 SCRIPTS  := $(ROOT)/scripts
 
 SLIDE_TEMPLATE    ?= lacnic46.pptx
@@ -42,6 +45,10 @@ EXTRA_TAG_PATTERN ?=
 NON_CHAPTERS := CLAUDE.md README.md GEMINI.md AGENTS.md
 MD_FILES     := $(filter-out $(NON_CHAPTERS),$(wildcard *.md))
 BOOK_PDF     := $(firstword $(BOOK_PDFS))
+# Make only tracks the first PDF, but rendering the first profile clears
+# _book/, so a later profile that fails (or a PDF deleted by hand)
+# leaves the others missing. Force a rebuild whenever any is missing.
+BOOK_MISSING := $(filter-out $(wildcard $(BOOK_PDFS)),$(BOOK_PDFS))
 BOOK_PROFILES ?=
 TAG          := $(COURSE)/$(VERSION)
 BOOK_DEPS    := $(MD_FILES) _quarto.yml $(wildcard _quarto-*.yml) title-page.tex.in Makefile $(ROOT)/mk/course.mk \
@@ -51,7 +58,7 @@ BOOK_DEPS    := $(MD_FILES) _quarto.yml $(wildcard _quarto-*.yml) title-page.tex
 SLIDE_SCRIPTS_DIR := slides
 SLIDE_OUT_DIR     := _slides
 
-.PHONY: help book slides clean release
+.PHONY: help book slides clean release FORCE
 
 help:
 	@echo "Course: $(COURSE)  (version $(VERSION), next tag $(TAG))"
@@ -66,8 +73,8 @@ help:
 	@echo "               via slides/build_moduleNN.py into $(SLIDE_OUT_DIR)/."
 	@echo "               Requires python-pptx."
 	@echo " "
-	@echo "  make release Commit all changes in this course (new files included),"
-	@echo "               push, tag $(TAG),"
+	@echo "  make release Run 'make book' (a no-op if the PDFs are current), commit"
+	@echo "               all changes in this course (new files included), push, tag $(TAG),"
 	@echo "               and push the tag (CI then publishes the _book/ PDFs)."
 	@echo " "
 	@echo "  make clean   Remove _book/, .quarto/, stray .qmd files, the generated"
@@ -76,7 +83,7 @@ help:
 
 book: $(BOOK_PDF)
 
-$(BOOK_PDF): $(BOOK_DEPS)
+$(BOOK_PDF): $(BOOK_DEPS) $(if $(BOOK_MISSING),FORCE)
 	bash $(SCRIPTS)/generate-title-page.sh . $(VERSION) '$(EXTRA_TAG_PATTERN)'
 	bash $(SCRIPTS)/mermaid-pre-render.sh .
 	status=0; \
@@ -104,15 +111,19 @@ slides:
 	rm -f $(SLIDE_SCRIPTS_DIR)/$(SLIDE_TEMPLATE)
 	@echo "==> Done: $(COURSE)/$(SLIDE_OUT_DIR)/*.pptx rebuilt"
 
-# `git add` first so new files (e.g. a new lab directory) make it into the
-# release; generated files are gitignored. The commit may be a no-op when
-# everything was committed beforehand.
-release:
+# Depends on book so stale PDFs (or none, after `make clean`) never get
+# tagged. `git add` first so new files (e.g. a new lab directory) make it
+# into the release; generated files are gitignored. Commit only when
+# something is staged under this course, so a real commit failure (e.g.
+# a hook) stops the release instead of tagging the previous commit.
+release: book
 	git add -A -- .
-	-git commit -m "$(COURSE): new release $(VERSION)" -- .
+	git diff --cached --quiet -- . || git commit -m "$(COURSE): new release $(VERSION)" -- .
 	git push
 	git tag $(TAG)
 	git push origin $(TAG)
+
+FORCE:
 
 clean:
 	-rm -rf _book .quarto
