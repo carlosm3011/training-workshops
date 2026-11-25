@@ -1,0 +1,4 @@
+# Generated per environment: node bind mounts, credentials, backups.
+/state/
+# Per-host parameter overrides.
+/.env

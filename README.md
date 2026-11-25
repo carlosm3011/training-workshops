@@ -21,6 +21,14 @@ A practical DNSSEC course for small and medium operators (ISPs, IXPs, small TLDs
 
 → [Course README](dns-dnssec-for-operators/README.md)
 
+## Labs
+
+| Lab | For | Status |
+|---|---|---|
+| [**DNS Lab**](dns-lab/README.md) | DNS y DNSSEC para Operadores | In development ([M0-Initial-Lab](https://github.com/carlosm3011/training-workshops/milestone/1)) |
+
+The DNS Lab gives each student group three BIND nodes in containers, with browser terminals, a lab-only `lab.` parent zone to publish their DS in, and a validating resolver. It runs on a Docker host and is driven by a justfile.
+
 ## Getting the PDFs
 
 Every release attaches the course's PDFs on the [Releases page](https://github.com/carlosm3011/training-workshops/releases). Release tags are per course: `<course>/vX.Y.Z`. The current PDFs are also committed under each course's `_book/` directory.
