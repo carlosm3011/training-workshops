@@ -4,7 +4,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. The node and master images and the network are done (`just build`, `just test-node`, `just test-net`); the lifecycle recipes still only print what they will do.
+> **Status:** in development. The node and master images, the network and the master's DNS roles are done (`just build`, `just test-node`, `just test-net`, `just test-master`); the lifecycle recipes still only print what they will do.
 
 ## Usage
 
@@ -20,9 +20,10 @@ just destroy        # back up, then remove the environment completely
 just build          # build the lab images
 just test-node      # boot a throwaway node and check it
 just test-net       # bring up master + 2 groups, check addressing and routing, tear down
+just test-master    # bring up master + group01, check lab., the resolver and DS publishing, tear down
 ```
 
-`test-net` uses the real names (`dns-lab`, `dnslab-master`, `group01-0` …), so it refuses to run while an environment exists.
+`test-net` and `test-master` use the real names (`dns-lab`, `dnslab-master`, `group01-0` …), so it refuses to run while an environment exists.
 
 The host also needs [just](https://just.systems) 1.15 or later; Ubuntu 24.04's package (`sudo apt install just`) is enough.
 
@@ -48,11 +49,13 @@ The command line wins over `.env`, which wins over the defaults.
 justfile        lifecycle recipes (init, destroy, backup, status, credentials)
 GOAL.md         requirements and design decisions
 images/node/    node image: Ubuntu 24.04, systemd, bind9 (see its README)
-images/master/  master image: NAT gateway and resolver; lab. zone in #4 (see its README)
+images/master/  master image: NAT gateway, lab. zone, resolver (see its README)
 web/            web page, terminals and DS form (#8-#10)
 templates/      config templates rendered by `just init`
 state/          generated per environment, gitignored:
   nodes/<container>/  each node's bind mount (/etc/bind, /var/cache/bind, /var/lib/bind)
+  master/             the master's bind mount, incl. the lab. zone and the web page's TSIG key
+  shared/             mounted at /etc/dnslab: lab.'s trust anchor (master rw, nodes ro)
   credentials         group and instructor passwords (mode 600)
   backups/            tarballs from `just backup`
 ```
@@ -67,7 +70,7 @@ Directories marked with an issue number are created by that issue.
      dns-lab-uplink (Docker bridge, NAT by Docker)
                │
         ┌──────┴───────┐
-        │ dnslab-master│  NAT for 10.53.0.0/16, resolver
+        │ dnslab-master│  NAT for 10.53.0.0/16, lab. zone, resolver
         └──────┬───────┘
                │ 10.53.0.1 / fd53::1
    dns-lab (internal: no route out except via the master)
@@ -85,4 +88,13 @@ Directories marked with an issue number are created by that issue.
 - Nodes route to the Internet only through the master, and use it as their resolver. If the master is stopped, the nodes are cut off.
 - IPv6 works between all containers on `dns-lab`, but there's no IPv6 route to the Internet in M0.
 - All nodes share one subnet, so groups can reach each other's nodes directly.
-- Each group's zone is `groupNN.lab.`, delegated from the master's `lab.` zone to the group's three nodes (#4).
+- Each group's zone is `groupNN.lab.`, delegated from the master's `lab.` zone to `ns0`, `ns1` and `ns2.groupNN.lab.`, the group's three nodes in order. Students publish their DS in `lab.` through the web page (#10).
+- The master's resolver validates `lab.` names with `lab.`'s own trust anchor. `dig` shows the `ad` flag as usual; for `delv`, use the nodes' `delv-lab` wrapper (see [images/node](images/node/README.md)).
+
+## DNS names in the lab
+
+| Name | Served by | Points to |
+|---|---|---|
+| `lab.` | master (`ns.lab.`, `10.53.0.1`) | lab-only TLD, signed |
+| `groupNN.lab.` | the group's nodes, once students configure them | delegated to `ns0-2.groupNN.lab.` |
+| `ns0.groupNN.lab.` … `ns2.groupNN.lab.` | glue in `lab.` | `10.53.NN.10-12`, `fd53::NN:10-12` |

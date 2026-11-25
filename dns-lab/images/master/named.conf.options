@@ -1,8 +1,8 @@
-// The master's named.conf.options: Ubuntu's stock file plus the server
-// clause below. Seeded into an empty /etc/bind on first boot (see the
-// node image's dnslab-seed); #4 adds the lab. zone and the resolver ACLs.
+// The master's named.conf.options, seeded into an empty /etc/bind on
+// first boot. Views, zones and ACLs are in named.conf.lab.
 options {
 	directory "/var/cache/bind";
+	key-directory "/var/lib/bind/keys";
 
 	dnssec-validation auto;
 
