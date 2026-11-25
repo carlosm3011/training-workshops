@@ -1,0 +1,71 @@
+# DNS lab for the "DNS y DNSSEC para Operadores" course. See GOAL.md for
+# the design and README.md for usage. Run on the lab host itself.
+#
+# Parameters, in order of precedence:
+#   just groups=3 host=lab.example.org <recipe>   # command line
+#   DNSLAB_GROUPS=3 / DNSLAB_HOST=... in .env      # per-host defaults
+#   6 groups on kobe.labs.lacnic.net               # built-in defaults
+
+set dotenv-load
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# Number of student groups; each gets three nodes, groupNN-0..2.
+groups := env("DNSLAB_GROUPS", "6")
+# Public name of the lab host: the web page's URL and certificate.
+host := env("DNSLAB_HOST", "kobe.labs.lacnic.net")
+
+network := "dns-lab"
+state := justfile_directory() / "state"
+
+# List the recipes.
+default:
+    @just --list --unsorted
+
+# Create a new environment: network, master, nodes, web page.
+init: _check
+    @echo "init (not implemented yet, see #5) would, on {{host}}:"
+    @echo "  - build the node and master images if missing (#2, #4)"
+    @echo "  - create the {{network}} network with fixed IPv4/IPv6 addressing (#3)"
+    @echo "  - start the master: NAT gateway, lab. parent zone, validating resolver (#4)"
+    @echo "  - start {{groups}} groups x 3 nodes: $(just groups={{groups}} _nodes | tr '\n' ' ')"
+    @echo "  - generate credentials in {{state}}/credentials"
+    @echo "  - start the web page behind Caddy at https://{{host}} (#8, #11)"
+
+# Remove the environment completely (backs up first).
+destroy: _check
+    @echo "destroy (not implemented yet, see #7) would, on {{host}}:"
+    @echo "  - run 'just backup', then ask for confirmation"
+    @echo "  - remove the master, every groupNN-N node, the web page and Caddy"
+    @echo "  - remove the {{network}} network and {{state}}, except {{state}}/backups"
+
+# Save every node's config, zones and keys to a tarball.
+backup: _check
+    @echo "backup (not implemented yet, see #6) would, on {{host}}:"
+    @echo "  - archive each node's bind mount under {{state}}/nodes, the master's state"
+    @echo "    and the credentials into {{state}}/backups/dns-lab-{{host}}-<timestamp>.tar.gz"
+
+# Show the parameters and, once implemented, every container's state.
+status: _check
+    @echo "host:    {{host}}"
+    @echo "groups:  {{groups}} ($(( {{groups}} * 3 )) nodes + master)"
+    @echo "network: {{network}}"
+    @echo "state:   {{state}}"
+    @echo "nodes:   $(just groups={{groups}} _nodes | tr '\n' ' ')"
+    @echo "(container states: not implemented yet, see #5)"
+
+# Print the web page's group and instructor passwords.
+credentials: _check
+    @echo "credentials (not implemented yet, see #5) would print {{state}}/credentials"
+
+# Fail early on a bad parameter. Two-digit group names and the
+# 10.53.GG.0/24 addressing (GOAL.md) cap the lab at 99 groups.
+[private]
+_check:
+    @[[ "{{groups}}" =~ ^[0-9]+$ ]] && (( {{groups}} >= 1 && {{groups}} <= 99 )) \
+        || { echo "groups must be a number from 1 to 99, got '{{groups}}'" >&2; exit 1; }
+    @[[ -n "{{host}}" ]] || { echo "host must not be empty" >&2; exit 1; }
+
+# Node container names, one per line.
+[private]
+_nodes:
+    @for g in $(seq 1 {{groups}}); do for n in 0 1 2; do printf 'group%02d-%d\n' $g $n; done; done

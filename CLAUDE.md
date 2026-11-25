@@ -10,6 +10,9 @@ Courses:
 - `dns-dnssec-for-operators/`: Spanish, one book PDF plus slide decks. Its v0.6.x releases predate this layout.
 - `bgp-101-intro-for-operators/`: English, a book PDF and a lab guide PDF (two Quarto profiles), Containerlab topologies, no decks.
 
+Labs:
+- `dns-lab/`: a Docker lab environment for the DNS course, driven by a justfile and run on the lab host. It is not a course: it has no `Makefile`, so `make courses` and `COURSE=` don't see it. `dns-lab/GOAL.md` records its requirements and decisions; keep it current when a decision changes. Its work is tracked in the GitHub milestone M0-Initial-Lab, and its issues are closed only with Carlos's OK.
+
 ## Commands
 
 ```sh
