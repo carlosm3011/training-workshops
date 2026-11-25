@@ -37,9 +37,10 @@ RUN rm -f /etc/bind/rndc.key \
 
 COPY dnslab-init.sh /usr/local/sbin/dnslab-init
 COPY dnslab-seed.sh /usr/local/sbin/dnslab-seed
-COPY dnslab-seed.service /etc/systemd/system/
-RUN chmod 755 /usr/local/sbin/dnslab-init /usr/local/sbin/dnslab-seed \
- && systemctl enable dnslab-seed.service named.service
+COPY dnslab-net.sh /usr/local/sbin/dnslab-net
+COPY dnslab-seed.service dnslab-net.service /etc/systemd/system/
+RUN chmod 755 /usr/local/sbin/dnslab-init /usr/local/sbin/dnslab-seed /usr/local/sbin/dnslab-net \
+ && systemctl enable dnslab-seed.service dnslab-net.service named.service
 
 # systemd shuts down cleanly on SIGRTMIN+3, not on Docker's default SIGTERM.
 STOPSIGNAL SIGRTMIN+3

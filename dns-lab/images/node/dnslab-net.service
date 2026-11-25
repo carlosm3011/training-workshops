@@ -1,0 +1,14 @@
+[Unit]
+Description=Route through the dns-lab master and use its resolver
+Before=network-online.target named.service
+Wants=network-online.target
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dnslab-net
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -32,17 +32,30 @@ An empty bind mount hides what the image has at that path, so `dnslab-seed.servi
 
 On the host, files owned by the container's `bind` user show a host account name with the same numeric ID (on kobe, group `_ssh`). Only the displayed name differs.
 
+## Routing and resolver
+
+The `dns-lab` network is internal: Docker gives nodes no default route and points `/etc/resolv.conf` at its own embedded resolver. `dnslab-net.service` fixes both on every boot, from variables passed with `docker run -e`:
+
+| Variable | Effect |
+|---|---|
+| `DNSLAB_GW4` | `ip route replace default via …` (the master, `10.53.0.1`). Unset on the master itself. |
+| `DNSLAB_RESOLVER` | Rewrites `/etc/resolv.conf` to use only this resolver (the master; `127.0.0.1` on the master). |
+
+systemd services don't inherit the container's environment, so the script reads PID 1's. Nodes have no IPv6 default route: IPv6 is lab-internal in M0.
+
 ## Run flags
 
 ```sh
 docker run -d --name group01-0 --hostname group01-0 \
-  --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+  --cgroupns=private --cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt apparmor=unconfined \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+  --network dns-lab --ip 10.53.1.10 --ip6 fd53::1:10 \
+  -e DNSLAB_GW4=10.53.0.1 -e DNSLAB_RESOLVER=10.53.0.1 \
   -v …/etc-bind:/etc/bind -v …/var-cache-bind:/var/cache/bind -v …/var-lib-bind:/var/lib/bind \
   dnslab-node
 ```
 
-The justfile keeps these flags in `node_run_flags`. The image sets `STOPSIGNAL SIGRTMIN+3`, so `docker stop` shuts systemd down cleanly in a couple of seconds.
+The justfile keeps the security flags in `node_run_flags`, and its `_node` recipe adds the rest. `NET_ADMIN` lets `dnslab-net` set the default route. It only affects the node's own network namespace, so a student can break their own node's routing but nobody else's. The image sets `STOPSIGNAL SIGRTMIN+3`, so `docker stop` shuts systemd down cleanly in a couple of seconds.
 
 ### Why SYS_ADMIN and no AppArmor profile
 
@@ -53,4 +66,5 @@ This is much narrower than `--privileged`: no host devices, the default seccomp 
 ### Differences from a real Ubuntu server
 
 - named isn't confined by AppArmor in the container, so module 3's note about AppArmor restricting named's directories doesn't reproduce here.
-- There is no network configuration inside the node: Docker assigns addresses, and #3 sets the route through the master.
+- There is no network configuration inside the node: Docker assigns the addresses, and `dnslab-net` sets the route and resolver.
+- Container names don't resolve between nodes: `/etc/resolv.conf` points at the master, not Docker's embedded DNS. Use addresses, or the lab's own names once #4 is in.

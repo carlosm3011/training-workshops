@@ -1,0 +1,19 @@
+// The master's named.conf.options: Ubuntu's stock file plus the server
+// clause below. Seeded into an empty /etc/bind on first boot (see the
+// node image's dnslab-seed); #4 adds the lab. zone and the resolver ACLs.
+options {
+	directory "/var/cache/bind";
+
+	dnssec-validation auto;
+
+	listen-on-v6 { any; };
+};
+
+// The master has an IPv6 address on the lab network (fd53::1) but no
+// IPv6 route to the Internet (GOAL.md: IPv6 is lab-internal in M0).
+// Without this, named tries the IPv6 addresses of root and TLD servers,
+// and cold-cache lookups can end in SERVFAIL. It still answers queries
+// from the lab over IPv6.
+server ::/0 {
+	bogus yes;
+};
