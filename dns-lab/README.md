@@ -4,7 +4,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. The node image is done (`just build`, `just test-node`); the lifecycle recipes still only print what they will do.
+> **Status:** in development. The node and master images and the network are done (`just build`, `just test-node`, `just test-net`); the lifecycle recipes still only print what they will do.
 
 ## Usage
 
@@ -19,7 +19,10 @@ just backup         # save every node's config, zones and keys
 just destroy        # back up, then remove the environment completely
 just build          # build the lab images
 just test-node      # boot a throwaway node and check it
+just test-net       # bring up master + 2 groups, check addressing and routing, tear down
 ```
+
+`test-net` uses the real names (`dns-lab`, `dnslab-master`, `group01-0` …), so it refuses to run while an environment exists.
 
 The host also needs [just](https://just.systems) 1.15 or later; Ubuntu 24.04's package (`sudo apt install just`) is enough.
 
@@ -45,7 +48,7 @@ The command line wins over `.env`, which wins over the defaults.
 justfile        lifecycle recipes (init, destroy, backup, status, credentials)
 GOAL.md         requirements and design decisions
 images/node/    node image: Ubuntu 24.04, systemd, bind9 (see its README)
-images/master/  master image: NAT gateway, lab. zone, resolver (#4)
+images/master/  master image: NAT gateway and resolver; lab. zone in #4 (see its README)
 web/            web page, terminals and DS form (#8-#10)
 templates/      config templates rendered by `just init`
 state/          generated per environment, gitignored:
@@ -56,12 +59,30 @@ state/          generated per environment, gitignored:
 
 Directories marked with an issue number are created by that issue.
 
-## Addressing
+## Network and addressing
+
+```
+            Internet
+               │
+     dns-lab-uplink (Docker bridge, NAT by Docker)
+               │
+        ┌──────┴───────┐
+        │ dnslab-master│  NAT for 10.53.0.0/16, resolver
+        └──────┬───────┘
+               │ 10.53.0.1 / fd53::1
+   dns-lab (internal: no route out except via the master)
+     ┌─────────┼──────────┬── … ──┐
+ group01-0  group01-1  group01-2   groupNN-N
+```
 
 | Container | IPv4 | IPv6 |
 |---|---|---|
 | master | `10.53.0.1` | `fd53::1` |
 | `groupGG-N` | `10.53.GG.(10+N)` | `fd53::GG:(10+N)` |
 | e.g. `group01-0` | `10.53.1.10` | `fd53::1:10` |
+| host's end of the bridge | `10.53.255.254` | `fd53::ffff` |
 
-Each group's zone is `groupNN.lab.`, delegated from the master's `lab.` zone to the group's three nodes.
+- Nodes route to the Internet only through the master, and use it as their resolver. If the master is stopped, the nodes are cut off.
+- IPv6 works between all containers on `dns-lab`, but there's no IPv6 route to the Internet in M0.
+- All nodes share one subnet, so groups can reach each other's nodes directly.
+- Each group's zone is `groupNN.lab.`, delegated from the master's `lab.` zone to the group's three nodes (#4).

@@ -17,11 +17,25 @@ host := env("DNSLAB_HOST", "kobe.labs.lacnic.net")
 network := "dns-lab"
 state := justfile_directory() / "state"
 
+# The master's second network, a normal Docker bridge to the Internet.
+uplink := "dns-lab-uplink"
+
+# Addressing (GOAL.md, README.md): master .0.1 / ::1, node groupGG-N at
+# 10.53.GG.(10+N) / fd53::GG:(10+N). The host's end of the bridge sits
+# out of the way at .255.254 / ::ffff.
+lab4 := "10.53.0.0/16"
+lab6 := "fd53::/64"
+master4 := "10.53.0.1"
+master6 := "fd53::1"
+
 node_image := "dnslab-node"
+master_image := "dnslab-master"
+master_name := "dnslab-master"
 # systemd as PID 1 without --privileged: images/node/dnslab-init.sh
 # remounts the container's own cgroup subtree read-write, which needs
-# SYS_ADMIN and no AppArmor profile. See images/node/README.md.
-node_run_flags := "--cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run --tmpfs /run/lock --tmpfs /tmp"
+# SYS_ADMIN and no AppArmor profile. NET_ADMIN lets dnslab-net set the
+# default route via the master. See images/node/README.md.
+node_run_flags := "--cgroupns=private --cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt apparmor=unconfined --tmpfs /run --tmpfs /run/lock --tmpfs /tmp"
 
 # List the recipes.
 default:
@@ -66,6 +80,109 @@ credentials: _check
 # Build the lab images.
 build:
     docker build -t {{node_image}} images/node
+    docker build -t {{master_image}} images/master
+
+# Bring up the network, the master and groups 1-2, check addressing and routing, tear down.
+test-net: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="{{state}}/test"
+    nodes=(group01-0 group01-1 group01-2 group02-0 group02-1 group02-2)
+    if docker network inspect {{network}} >/dev/null 2>&1; then
+        echo "A {{network}} environment already exists on this host; test-net needs it absent." >&2; exit 1
+    fi
+    cleanup() {
+        docker rm -f {{master_name}} "${nodes[@]}" >/dev/null 2>&1 || true
+        docker network rm {{network}} {{uplink}} >/dev/null 2>&1 || true
+        sudo rm -rf "$root"
+    }
+    trap cleanup EXIT
+    cleanup
+    just _network
+    just _master "$root"
+    for g in 1 2; do for n in 0 1 2; do just _node "$root" $g $n; done; done
+    for c in {{master_name}} "${nodes[@]}"; do just _wait "$c"; done
+    x() { docker exec "$@"; }
+    ok() { echo "ok   $*"; }
+    fail() { echo "FAIL $*" >&2; exit 1; }
+    for g in 1 2; do for n in 0 1 2; do
+        c=$(printf 'group%02d-%d' $g $n); a4="10.53.$g.$((10 + n))"; a6="fd53::$g:$((10 + n))"
+        x "$c" ip -br addr show eth0 | grep -w "$a4/16" | grep -qw "$a6/64" \
+            || fail "$c doesn't have $a4 and $a6"
+    done; done
+    ok "every node has its 10.53.G.(10+N) and fd53::G:(10+N) address"
+    x group01-0 ping -c1 -W2 {{master4}} >/dev/null && x group01-0 ping -c1 -W2 {{master6}} >/dev/null \
+        && ok "node pings the master over IPv4 and IPv6" || fail "node can't ping the master"
+    x group01-0 ping -c1 -W2 10.53.2.12 >/dev/null && x group01-0 ping -c1 -W2 fd53::2:12 >/dev/null \
+        && ok "node pings another group's node over IPv4 and IPv6" || fail "node can't ping group02-2"
+    x group01-0 ip route show default | grep -q "via {{master4}}" \
+        && ok "default route via {{master4}}" || fail "no default route via the master"
+    x group01-0 curl -sSI -m 10 -o /dev/null https://www.lacnic.net \
+        && ok "node reaches https://www.lacnic.net through the master" || fail "node can't reach the Internet"
+    srv=$(x group01-0 dig www.lacnic.net | sed -n 's/^;; SERVER: \([^#]*\)#.*/\1/p')
+    [ "$srv" = {{master4}} ] && ok "dig on a node is answered by {{master4}}" || fail "dig answered by '$srv'"
+    docker stop {{master_name}} >/dev/null
+    ! x group01-0 curl -sSI -m 5 -o /dev/null https://1.1.1.1 2>/dev/null \
+        && ok "with the master stopped, the node can't reach the Internet" || fail "node bypasses the master"
+    docker start {{master_name}} >/dev/null; just _wait_resolver
+    x group01-0 curl -sSI -m 10 -o /dev/null https://www.lacnic.net \
+        && ok "Internet access is back once the master restarts" || fail "no Internet after master restart"
+    echo "all network checks passed"
+
+# Create the internal dns-lab network and the master's uplink, if missing.
+[private]
+_network:
+    @docker network inspect {{network}} >/dev/null 2>&1 || docker network create --internal \
+        --subnet {{lab4}} --gateway 10.53.255.254 --ipv6 --subnet {{lab6}} --gateway fd53::ffff {{network}}
+    @docker network inspect {{uplink}} >/dev/null 2>&1 || docker network create {{uplink}}
+
+# Create and start the master: 10.53.0.1 on dns-lab plus the uplink, NAT on.
+[private]
+_master root=state:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{root}}/master"
+    mkdir -p "$dir"/{etc-bind,var-cache-bind,var-lib-bind}
+    docker create --name {{master_name}} --hostname {{master_name}} {{node_run_flags}} \
+        --network {{network}} --ip {{master4}} --ip6 {{master6}} \
+        --sysctl net.ipv4.ip_forward=1 \
+        -e DNSLAB_LAB4={{lab4}} -e DNSLAB_RESOLVER=127.0.0.1 \
+        -v "$dir/etc-bind:/etc/bind" -v "$dir/var-cache-bind:/var/cache/bind" \
+        -v "$dir/var-lib-bind:/var/lib/bind" {{master_image}} >/dev/null
+    docker network connect {{uplink}} {{master_name}}
+    docker start {{master_name}} >/dev/null
+    just _wait_resolver
+    echo "started {{master_name}} ({{master4}}, {{master6}})"
+
+# Wait up to 60 s for the master's resolver to answer: named is up a few
+# seconds before it can resolve (root priming, trust anchor), and nodes
+# booting meanwhile would see lookups fail.
+[private]
+_wait_resolver:
+    @for _ in $(seq 60); do docker exec {{master_name}} dig +time=1 +tries=1 @127.0.0.1 . SOA 2>/dev/null | grep "status: NOERROR" >/dev/null && exit 0; sleep 1; done; \
+        echo "{{master_name}}: resolver not answering after 60 s" >&2; exit 1
+
+# Create and start node groupGG-N with its fixed addresses.
+[private]
+_node root g n:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    name=$(printf 'group%02d-%d' {{g}} {{n}})
+    a4="10.53.$((10#{{g}})).$((10 + {{n}}))"; a6="fd53::$((10#{{g}})):$((10 + {{n}}))"
+    dir="{{root}}/nodes/$name"
+    mkdir -p "$dir"/{etc-bind,var-cache-bind,var-lib-bind}
+    docker run -d --name "$name" --hostname "$name" {{node_run_flags}} \
+        --network {{network}} --ip "$a4" --ip6 "$a6" \
+        -e DNSLAB_GW4={{master4}} -e DNSLAB_RESOLVER={{master4}} \
+        -v "$dir/etc-bind:/etc/bind" -v "$dir/var-cache-bind:/var/cache/bind" \
+        -v "$dir/var-lib-bind:/var/lib/bind" {{node_image}} >/dev/null
+    echo "started $name ($a4, $a6)"
+
+# Wait up to 30 s for a container's named to be up.
+[private]
+_wait name:
+    @for _ in $(seq 30); do docker exec {{name}} systemctl is-active -q named 2>/dev/null && exit 0; sleep 1; done; \
+        echo "{{name}}: named not up after 30 s" >&2; exit 1
 
 # Boot a throwaway node and check it: systemd, bind9, tools, bind mounts, clean stop.
 test-node: build
