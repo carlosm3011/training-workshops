@@ -1,0 +1,19 @@
+/* Dark page, so the browser draws xterm's scrollbar dark too. */
+:root { color-scheme: dark; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex;
+  flex-direction: column;
+  background: #1d1d1b;
+  color: #ececea;
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+header {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 2px solid #c53425;
+}
+#status { color: #a3a39d; font-size: 0.85rem; }
+#term { flex: 1; min-height: 0; padding: 0.25rem 0 0 0.4rem; }

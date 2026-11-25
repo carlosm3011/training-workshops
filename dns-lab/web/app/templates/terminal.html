@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ name }} · Laboratorio DNS</title>
+  <link rel="stylesheet" href="/static/vendor/xterm.css">
+  <link rel="stylesheet" href="/static/terminal.css">
+</head>
+<body>
+  <header>
+    <strong>{{ name }}</strong>
+    <span id="status">conectando…</span>
+  </header>
+  <div id="term" data-node="{{ name }}"></div>
+  <script src="/static/vendor/xterm.js"></script>
+  <script src="/static/vendor/addon-fit.js"></script>
+  <script src="/static/terminal.js"></script>
+</body>
+</html>

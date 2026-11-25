@@ -1,12 +1,21 @@
 # Web page
 
-The lab's web page, `dnslab-web`: students log in, see their nodes, and start, stop or restart them. The UI is in Spanish, like the course. Browser terminals (#9) and the DS form (#10) come next.
+The lab's web page, `dnslab-web`: students log in, see their nodes, open terminals on them, and start, stop or restart them. The UI is in Spanish, like the course. The DS form (#10) comes next.
 
 ## What it does
 
 - **Login** with the passwords in `state/credentials`. Each group (`group01`, `group02` …) sees only its own three nodes; `instructor` sees every node and the master. Sessions are signed cookies (SameSite=strict) that last 12 hours; **Salir** ends them.
 - **Node list:** name, state, IPv4 and IPv6 on `dns-lab`, and time since start. The page polls every 2 s, so changes show without reloading. A stopped container has no addresses, so those columns are empty while it's down.
 - **Iniciar / Detener / Reiniciar** run `docker start`, `stop` and `restart` on the container. A config change inside a node still needs `rndc reload` or `systemctl restart bind9`; the buttons are for whole-container restarts and for recovering a broken node.
+
+## Terminals
+
+Clicking a running node's name opens `/terminal/<name>` in a new tab: a root login shell (`bash -l` in `/root`) in that node, rendered with [xterm.js](https://xtermjs.org/) 5.5. The page's websocket, `/ws/terminal/<name>`, is bridged to `docker exec`:
+
+- Binary frames carry terminal bytes both ways (UTF-8); text frames carry JSON control messages from the browser, so far only `{"type": "resize", "cols": …, "rows": …}`. The page refits the terminal when the window changes size and tells the shell, so vim, less and `journalctl -f` lay out correctly.
+- The websocket needs the same session as the page, the same per-node authorization, and an `Origin` matching the host, so a page on another site can't open a shell even if the browser sent the cookie.
+- **Closing the tab ends the shell.** Docker keeps an exec'd process running when its connection drops, which would leave shells and their jobs behind. So the shell first reports its PID in an OSC escape sequence (`ESC ] 777;dnslab-pid;<pid> BEL`), which the bridge strips from the output. When the websocket closes, the bridge sends that PID SIGHUP (bash passes it on to its jobs), then SIGKILL a second later if it's still there.
+- xterm.js is fetched at image build time from jsDelivr, pinned by SHA-256 (`ADD --checksum` in the Dockerfile), and served by the app, so students' browsers only need to reach the lab.
 
 ## Authorization
 
@@ -58,4 +67,10 @@ Passwords are 12 random characters from an alphabet without look-alikes (no `l`,
 
 ## Checking it
 
-`just test-web` brings up the master, groups 1–2 and the web page, then checks login, what each user sees, the buttons, authorization and logout through the same HTTP API the page uses, and tears everything down.
+`just test-web` brings up the master, groups 1–2 and the web page, then checks login, what each user sees, the buttons, authorization and logout through the same HTTP API the page uses, and tears everything down. It then runs `tests/terminal_check.py` inside the web container, a websocket client that checks the terminals:
+- root shell on the right node, with no PID mark in the output;
+- UTF-8, resize and Ctrl-C (including ending `journalctl -f`);
+- closing the terminal ends the shell and its jobs;
+- refusals: another group's node, the master, the web container, no session, a foreign Origin;
+- the instructor gets a shell on the master;
+- 18 terminals at once, with round-trip times.

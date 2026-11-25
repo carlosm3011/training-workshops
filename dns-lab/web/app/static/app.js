@@ -34,8 +34,20 @@ function render(nodes) {
   tbody.replaceChildren(...nodes.map((node) => {
     const tr = document.createElement("tr");
     if (node.role === "master") tr.className = "master";
+    const name = cell("", "name");
+    if (node.status === "running") {
+      const a = document.createElement("a");
+      a.href = `/terminal/${encodeURIComponent(node.name)}`;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.title = "Abrir una terminal en una pestaña nueva";
+      a.textContent = node.name;
+      name.append(a);
+    } else {
+      name.textContent = node.name;
+    }
     tr.append(
-      cell(node.name, "name"),
+      name,
       cell(busy.has(node.name) ? "…" : (STATUS[node.status] || node.status), `status ${node.status}`),
       cell(node.ipv4, "addr"),
       cell(node.ipv6, "addr"),

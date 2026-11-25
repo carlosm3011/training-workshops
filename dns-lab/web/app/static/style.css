@@ -49,6 +49,8 @@ th, td { padding: 0.5rem 0.6rem; text-align: left; border-bottom: 1px solid var(
 th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 tr.master td.name::after { content: " · master"; color: var(--muted); font-weight: normal; }
 td.name { font-weight: 600; }
+td.name a { color: var(--accent); text-decoration: none; }
+td.name a:hover { text-decoration: underline; }
 td.addr { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
 td.status.running { color: var(--ok); }
 td.status.exited, td.status.created { color: var(--off); }

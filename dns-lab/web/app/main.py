@@ -12,15 +12,18 @@ Configuration (environment, set by the justfile):
   DNSLAB_NETWORK         Docker network whose addresses are shown (dns-lab)
 """
 
+import asyncio
+import json
 import os
 import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import docker
 from docker.errors import NotFound
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -169,3 +172,108 @@ def api_action(request: Request, name: str, action: str):
         container.restart(timeout=10)
     container.reload()
     return JSONResponse(describe(container))
+
+
+# --- Terminals ---------------------------------------------------------------
+#
+# /terminal/<name> is an xterm.js page; its websocket, /ws/terminal/<name>,
+# is bridged to `docker exec -it <name> bash -l`. Binary frames carry
+# terminal bytes both ways; text frames carry JSON control messages from
+# the browser ({"type": "resize", "cols": …, "rows": …}).
+#
+# Docker keeps an exec'd process running when its connection closes, so a
+# closed tab would leave the shell and its jobs behind. The shell therefore
+# starts by reporting its PID in an OSC escape sequence the bridge strips
+# from the output, and the bridge hangs it up when the websocket closes.
+
+PID_MARK = re.compile(rb"\x1b\]777;dnslab-pid;(\d+)\x07")
+SHELL = ["bash", "-c", r"printf '\033]777;dnslab-pid;%s\007' $$; exec bash -l"]
+
+
+@app.get("/terminal/{name}", response_class=HTMLResponse)
+def terminal_page(request: Request, name: str):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/login", status_code=303)
+    get_allowed(user, name)
+    return templates.TemplateResponse(request, "terminal.html", {"name": name})
+
+
+def same_origin(ws: WebSocket) -> bool:
+    """Refuse websockets opened by pages on other sites (cross-site
+    websocket hijacking); the SameSite cookie is the first line."""
+    origin = ws.headers.get("origin")
+    return origin is not None and urlsplit(origin).netloc == ws.headers.get("host")
+
+
+def hang_up(container, pid: int) -> None:
+    """SIGHUP the shell (bash passes it on to its jobs), SIGKILL if it lingers."""
+    ex = client.api.exec_create(container.id, ["sh", "-c",
+        f"kill -HUP {pid} 2>/dev/null || exit 0; sleep 1; kill -KILL {pid} 2>/dev/null; true"])
+    client.api.exec_start(ex["Id"])
+
+
+@app.websocket("/ws/terminal/{name}")
+async def terminal_ws(ws: WebSocket, name: str):
+    user = ws.session.get("user")
+    if user not in CREDENTIALS or not same_origin(ws):
+        await ws.close(code=4401)
+        return
+    try:
+        container = await asyncio.to_thread(get_allowed, user, name)
+    except HTTPException:
+        await ws.close(code=4403)
+        return
+    await ws.accept()
+
+    api = client.api
+    ex = await asyncio.to_thread(api.exec_create, container.id, SHELL, tty=True, stdin=True,
+                                 workdir="/root", environment={"TERM": "xterm-256color"})
+    conn = await asyncio.to_thread(api.exec_start, ex["Id"], tty=True, socket=True)
+    sock = conn._sock
+    sock.setblocking(False)
+    loop = asyncio.get_running_loop()
+    pid = None
+
+    async def container_to_browser():
+        nonlocal pid
+        head = b""  # output held back until the PID mark has been stripped
+        while data := await loop.sock_recv(sock, 65536):
+            if pid is None:
+                head += data
+                if m := PID_MARK.search(head):
+                    pid, data = int(m.group(1)), head[:m.start()] + head[m.end():]
+                elif len(head) < 512:
+                    continue
+                else:  # no mark: send everything, give up on hanging up
+                    pid, data = 0, head
+            if data:
+                await ws.send_bytes(data)
+
+    async def browser_to_container():
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                return
+            if msg.get("bytes"):
+                await loop.sock_sendall(sock, msg["bytes"])
+            elif msg.get("text"):
+                ctl = json.loads(msg["text"])
+                if ctl.get("type") == "resize":
+                    cols, rows = int(ctl["cols"]), int(ctl["rows"])
+                    if 0 < cols <= 1000 and 0 < rows <= 1000:
+                        await asyncio.to_thread(api.exec_resize, ex["Id"], height=rows, width=cols)
+
+    tasks = [asyncio.create_task(container_to_browser()), asyncio.create_task(browser_to_container())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+        sock.close()
+        if pid:
+            await asyncio.to_thread(hang_up, container, pid)
+        try:
+            await ws.close()
+        except RuntimeError:
+            pass  # already closed by the browser

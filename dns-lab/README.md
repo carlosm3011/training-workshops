@@ -4,7 +4,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. Done: the node and master images, the network, the master's DNS roles and the web page's login and controls (`just build` and the `just test-*` recipes). The lifecycle recipes `init`, `backup` and `destroy` still only print what they will do.
+> **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls and terminals (`just build` and the `just test-*` recipes). The lifecycle recipes `init`, `backup` and `destroy` still only print what they will do.
 
 ## Usage
 
@@ -51,7 +51,7 @@ justfile        lifecycle recipes (init, destroy, backup, status, credentials)
 GOAL.md         requirements and design decisions
 images/node/    node image: Ubuntu 24.04, systemd, bind9 (see its README)
 images/master/  master image: NAT gateway, lab. zone, resolver (see its README)
-web/            web page: login, node list and controls; terminals and DS form in #9-#10 (see its README)
+web/            web page: login, node list, controls and terminals; DS form in #10 (see its README)
 templates/      config templates rendered by `just init`
 state/          generated per environment, gitignored:
   nodes/<container>/  each node's bind mount (/etc/bind, /var/cache/bind, /var/lib/bind)
@@ -95,7 +95,7 @@ Directories marked with an issue number are created by that issue.
 
 ## Web page
 
-`dnslab-web` listens on `127.0.0.1:8080` on the lab host; until Caddy is in front of it (#11), use an SSH tunnel (`ssh -N -L 8080:127.0.0.1:8080 <host>`). Groups log in with the passwords from `just credentials` and see only their own nodes; the instructor sees everything. See [web/README.md](web/README.md).
+`dnslab-web` listens on `127.0.0.1:8080` on the lab host; until Caddy is in front of it (#11), use an SSH tunnel (`ssh -N -L 8080:127.0.0.1:8080 <host>`). Groups log in with the passwords from `just credentials` and see only their own nodes; the instructor sees everything. Clicking a node's name opens a root shell on it in a new tab. See [web/README.md](web/README.md).
 
 ## DNS names in the lab
 
