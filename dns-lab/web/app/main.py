@@ -189,7 +189,9 @@ def api_action(request: Request, name: str, action: str):
 # The app checks the owner and parses the record itself, so it can explain
 # what's wrong, then runs nsupdate inside the master with the dnslab-webapp
 # TSIG key. named's update-policy is the second fence: that key may only
-# change DS records at groupNN.lab. names.
+# change DS records at groupNN.lab. names. After each change the lab's
+# resolver forgets what it cached under the zone, so the result (validated,
+# insecure or bogus) shows at once instead of after lab.'s 60 s TTLs.
 
 DS_TYPE_NAMES = {1: "SHA-1", 2: "SHA-256", 4: "SHA-384"}
 
@@ -289,6 +291,10 @@ def nsupdate(lines: list[str]) -> None:
         raise HTTPException(status_code=502, detail=f"lab. rechazó el cambio: {out.strip() or code}")
 
 
+def flush_resolver(zone: dns.name.Name) -> None:
+    master_run(["rndc", "flushtree", zone.to_text(), "resolver"])
+
+
 def ds_zone_for(user: str, group: str) -> dns.name.Name:
     if not GROUP_RE.match(group) or group not in CREDENTIALS or user not in ("instructor", group):
         raise HTTPException(status_code=403, detail="forbidden")
@@ -317,6 +323,7 @@ def api_ds_add(request: Request, group: str, text: str = Body(..., embed=True)):
     if not add:
         return ds_response(zone, "Ese DS ya estaba publicado.")
     nsupdate([f"update add {zone.to_text()} {DS_TTL} IN DS {ds_text(rd)}" for rd in add])
+    flush_resolver(zone)
     n = len(add)
     return ds_response(zone, f"{n} DS publicado{'s' if n > 1 else ''} en {PARENT.to_text()}")
 
@@ -331,6 +338,7 @@ def api_ds_delete(request: Request, group: str, record: str = Body(..., embed=Tr
     if ds_text(rd) not in {ds_text(r) for r in current_ds(zone)}:
         raise HTTPException(status_code=404, detail="Ese DS no está publicado.")
     nsupdate([f"update delete {zone.to_text()} IN DS {ds_text(rd)}"])
+    flush_resolver(zone)
     return ds_response(zone, f"DS {rd.key_tag} quitado de {PARENT.to_text()}")
 
 
