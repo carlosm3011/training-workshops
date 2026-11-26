@@ -113,7 +113,8 @@ status: _check
     # master first, then nodes, then web and Caddy
     names=$(echo "$names" | awk '/^dnslab-master$/ { print 0, $0; next } /^group/ { print 1, $0; next } { print 2, $0 }' | sort | cut -d' ' -f2)
     printf '%-15s %-10s %-12s %s\n' CONTAINER STATE IPV4 IPV6
-    docker inspect -f '{{{{.Name}} {{{{.State.Status}} {{{{with index .NetworkSettings.Networks "{{network}}"}}{{{{.IPAddress}} {{{{.GlobalIPv6Address}}{{{{end}}' $names \
+    # The fixed addresses given at creation, so stopped containers show them too
+    docker inspect -f '{{{{.Name}} {{{{.State.Status}} {{{{with index .NetworkSettings.Networks "{{network}}"}}{{{{with .IPAMConfig}}{{{{.IPv4Address}} {{{{.IPv6Address}}{{{{end}}{{{{end}}' $names \
         | while read -r name state v4 v6; do printf '%-15s %-10s %-12s %s\n' "${name#/}" "$state" "${v4:--}" "${v6:--}"; done
 
 # Print the web page's certificate: its path, names, expiry and fingerprint.
