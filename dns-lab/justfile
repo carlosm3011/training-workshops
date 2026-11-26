@@ -440,7 +440,7 @@ test-https: build
 
     hostip=$(ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1) }')
     probe() { docker run --rm --network {{uplink}} --entrypoint curl {{node_image}} -sk -m 3 -o /dev/null -w '%{http_code}' "$@" || true; }
-    [ "$(probe https://"$hostip"/login)" != 000 ] && [ "$(probe http://"$hostip":{{web_port}}/login)" = 000 ] \
+    [ "$(probe --resolve {{host}}:443:"$hostip" https://{{host}}/login)" = 200 ] && [ "$(probe http://"$hostip":{{web_port}}/login)" = 000 ] \
         && ok "from outside the host ($hostip): 443 answers, {{web_port}} doesn't" || fail "port {{web_port}} reachable on $hostip"
     echo "all https checks passed"
 
