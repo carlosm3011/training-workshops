@@ -21,9 +21,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import dns.exception
+import dns.name
+import dns.rdata
+import dns.rdataclass
+import dns.rdatatype
 import docker
-from docker.errors import NotFound
-from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
+from docker.errors import APIError, NotFound
+from fastapi import Body, FastAPI, Form, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -33,6 +38,8 @@ HERE = Path(__file__).parent
 NETWORK = os.environ.get("DNSLAB_NETWORK", "dns-lab")
 GROUP_RE = re.compile(r"^group\d{2}$")
 ACTIONS = {"start", "stop", "restart"}
+PARENT = dns.name.from_text("lab.")  # the parent zone groups publish their DS in
+DS_TTL = 60  # lab.'s TTL
 
 
 def load_credentials(path: str) -> dict[str, str]:
@@ -122,7 +129,8 @@ def index(request: Request):
     user = current_user(request)
     if user is None:
         return RedirectResponse("/login", status_code=303)
-    return templates.TemplateResponse(request, "index.html", {"user": user})
+    groups = sorted(g for g in CREDENTIALS if GROUP_RE.match(g)) if user == "instructor" else [user]
+    return templates.TemplateResponse(request, "index.html", {"user": user, "groups": groups})
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -172,6 +180,166 @@ def api_action(request: Request, name: str, action: str):
         container.restart(timeout=10)
     container.reload()
     return JSONResponse(describe(container))
+
+
+# --- DS records in lab. (#10) -------------------------------------------------
+#
+# A registrar's panel in miniature: each group lists, adds and removes the
+# DS records of groupNN.lab. in lab.; the instructor does it for any group.
+# The app checks the owner and parses the record itself, so it can explain
+# what's wrong, then runs nsupdate inside the master with the dnslab-webapp
+# TSIG key. named's update-policy is the second fence: that key may only
+# change DS records at groupNN.lab. names. After each change the lab's
+# resolver forgets what it cached under the zone, so the result (validated,
+# insecure or bogus) shows at once instead of after lab.'s 60 s TTLs.
+
+DS_TYPE_NAMES = {1: "SHA-1", 2: "SHA-256", 4: "SHA-384"}
+
+
+class DSError(ValueError):
+    """A pasted record we refuse; the message is shown to the student."""
+
+
+def zone_of(group: str) -> dns.name.Name:
+    return dns.name.Name((group.encode(),)).concatenate(PARENT)
+
+
+def ds_text(rd) -> str:
+    """Canonical presentation: one unbroken upper-case digest."""
+    return f"{rd.key_tag} {rd.algorithm} {rd.digest_type} {rd.digest.hex().upper()}"
+
+
+def ds_json(rd) -> dict:
+    return {"text": ds_text(rd), "key_tag": rd.key_tag, "algorithm": rd.algorithm,
+            "digest_type": rd.digest_type, "digest": rd.digest.hex().upper()}
+
+
+def parse_ds_line(line: str, zone: dns.name.Name):
+    """Parse one "owner [TTL] [IN] DS keytag alg type digest" line, as
+    dnssec-dsfromkey or dig print it, and check it belongs to ``zone``."""
+    tokens = line.split()
+    if len(tokens) < 2:
+        raise DSError(f"No es un registro DS: «{line}».")
+    try:
+        owner = dns.name.from_text(tokens[0])
+    except dns.exception.DNSException:
+        raise DSError(f"Nombre inválido: «{tokens[0]}».") from None
+    rest = tokens[1:]
+    # TTL and class, in either order, as in a zone file
+    while rest and (rest[0].isdigit() or rest[0].upper() == "IN"):
+        rest = rest[1:]
+    if not rest:
+        raise DSError(f"No es un registro DS: «{line}».")
+    if rest[0].upper() != "DS":
+        raise DSError(f"Es un registro {rest[0].upper()}, no DS. Pegá la salida de dnssec-dsfromkey.")
+    if owner != zone:
+        raise DSError(f"Solo podés publicar DS para {zone.to_text()} y este es para {owner.to_text()}")
+    try:
+        rd = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DS, " ".join(rest[1:]))
+    except dns.exception.DNSException as e:
+        raise DSError(f"El DS no es válido ({e}).") from None
+    if rd.digest_type not in DS_TYPE_NAMES:
+        raise DSError(f"Tipo de digest {rd.digest_type} desconocido: usá 2 (SHA-256) o 4 (SHA-384).")
+    return rd
+
+
+def parse_ds_input(text: str, zone: dns.name.Name) -> list:
+    """Every non-empty, non-comment line of the form; all or nothing."""
+    lines = [l.strip() for l in text.splitlines()]
+    lines = [l for l in lines if l and not l.startswith(";")]
+    if not lines:
+        raise DSError("Pegá al menos un registro DS.")
+    if len(lines) > 10:
+        raise DSError("Demasiadas líneas: pegá solo los registros DS.")
+    return [parse_ds_line(l, zone) for l in lines]
+
+
+def master():
+    found = client.containers.list(filters={"label": "dnslab.role=master", "status": "running"})
+    if not found:
+        raise HTTPException(status_code=503, detail="El servidor maestro no está en marcha.")
+    return found[0]
+
+
+def master_run(cmd: list[str]) -> tuple[int, str]:
+    try:
+        code, (out, err) = master().exec_run(cmd, demux=True)
+    except APIError as e:
+        raise HTTPException(status_code=503, detail="No se pudo contactar al servidor maestro.") from e
+    return code, ((out or b"") + (err or b"")).decode(errors="replace")
+
+
+def current_ds(zone: dns.name.Name) -> list:
+    """The DS RRset at ``zone`` as lab.'s authoritative view serves it
+    (RD=0 from the master's loopback lands there)."""
+    code, out = master_run(["dig", "+norec", "+noall", "+answer", "@127.0.0.1", zone.to_text(), "DS"])
+    if code != 0:
+        raise HTTPException(status_code=503, detail="No se pudo consultar lab. en el servidor maestro.")
+    records = []
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) > 4 and f[3] == "DS" and dns.name.from_text(f[0]) == zone:
+            records.append(dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DS, " ".join(f[4:])))
+    return sorted(records, key=ds_text)
+
+
+def nsupdate(lines: list[str]) -> None:
+    script = "server 127.0.0.1\nzone {}\n{}\nsend\n".format(PARENT.to_text(), "\n".join(lines))
+    # The script travels as an argument, never through the shell's parser.
+    code, out = master_run(["sh", "-c", 'printf "%s" "$1" | nsupdate -k /etc/bind/dnslab-webapp.key', "sh", script])
+    if code != 0:
+        raise HTTPException(status_code=502, detail=f"lab. rechazó el cambio: {out.strip() or code}")
+
+
+def flush_resolver(zone: dns.name.Name) -> None:
+    master_run(["rndc", "flushtree", zone.to_text(), "resolver"])
+
+
+def ds_zone_for(user: str, group: str) -> dns.name.Name:
+    if not GROUP_RE.match(group) or group not in CREDENTIALS or user not in ("instructor", group):
+        raise HTTPException(status_code=403, detail="forbidden")
+    return zone_of(group)
+
+
+def ds_response(zone: dns.name.Name, message: str = "") -> dict:
+    return {"zone": zone.to_text(), "records": [ds_json(rd) for rd in current_ds(zone)], "message": message}
+
+
+@app.get("/api/ds/{group}")
+def api_ds(request: Request, group: str):
+    zone = ds_zone_for(require_user(request), group)
+    return ds_response(zone)
+
+
+@app.post("/api/ds/{group}")
+def api_ds_add(request: Request, group: str, text: str = Body(..., embed=True)):
+    zone = ds_zone_for(require_user(request), group)
+    try:
+        new = parse_ds_input(text, zone)
+    except DSError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    have = {ds_text(rd) for rd in current_ds(zone)}
+    add = [rd for rd in new if ds_text(rd) not in have]
+    if not add:
+        return ds_response(zone, "Ese DS ya estaba publicado.")
+    nsupdate([f"update add {zone.to_text()} {DS_TTL} IN DS {ds_text(rd)}" for rd in add])
+    flush_resolver(zone)
+    n = len(add)
+    return ds_response(zone, f"{n} DS publicado{'s' if n > 1 else ''} en {PARENT.to_text()}")
+
+
+@app.post("/api/ds/{group}/delete")
+def api_ds_delete(request: Request, group: str, record: str = Body(..., embed=True)):
+    zone = ds_zone_for(require_user(request), group)
+    try:
+        rd = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DS, record)
+    except dns.exception.DNSException:
+        raise HTTPException(status_code=400, detail="DS inválido.") from None
+    if ds_text(rd) not in {ds_text(r) for r in current_ds(zone)}:
+        raise HTTPException(status_code=404, detail="Ese DS no está publicado.")
+    nsupdate([f"update delete {zone.to_text()} IN DS {ds_text(rd)}"])
+    flush_resolver(zone)
+    return ds_response(zone, f"DS {rd.key_tag} quitado de {PARENT.to_text()}")
 
 
 # --- Terminals ---------------------------------------------------------------

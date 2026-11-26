@@ -27,7 +27,7 @@ Agreed on 2026-11-25.
 | Master's DNS role | Authoritative for a lab-only **`lab.` TLD** that delegates `groupNN.lab.` to each group's three nodes, plus a **validating resolver** for the lab with `lab.`'s key as trust anchor. | Students can publish a DS in a real parent and see validation succeed or fail end to end (module 4). |
 | Master's network role | NAT gateway: `dns-lab` is an internal network, and nodes route to the Internet only through the master. | As required; stopping the master cuts the nodes off, with no bypass. |
 | Addressing | Fixed **IPv4 and IPv6** per node. | Exercises can hardcode `allow-transfer`, `also-notify` and AAAA glue. |
-| DS publication | A registrar-style **form on the web page**. The web app applies it to `lab.` with a TSIG key only it holds, limited to DS records under the group's own name. | Mirrors publishing a DS through a registrar's panel. |
+| DS publication | A registrar-style **form on the web page**. The web app applies it to `lab.` with a TSIG key the nodes never see, limited to DS records under the group's own name. | Mirrors publishing a DS through a registrar's panel. |
 | Web access | **Per-group login**: a group sees only its own three nodes; an instructor login sees all nodes and the master. | Groups can't break each other's nodes. |
 | Web terminal | **xterm.js** in the browser, bridged over a websocket to `docker exec` on the host. | One small service, with authorization handled in the same app. |
 | Buttons | Start/Stop/Restart act on the **container** (`docker start/stop/restart`). | Also recovers a node a student broke. Routine reloads stay inside the node (`rndc`, `systemctl`). |
@@ -51,6 +51,7 @@ Chosen while planning and written into the issues; change them here first if nee
 - **Web app stack:** Python (FastAPI with the Docker SDK) in a container with the Docker socket mounted, not attached to `dns-lab`.
 - **Web page** (#8): UI in Spanish. Credentials in `state/credentials`, one `name password` line for `instructor` and each `groupNN`, in clear text so `just credentials` can print them. Lab containers carry `dnslab.role` and `dnslab.group` labels, and the app authorizes by label, never by what the browser sends. It listens on `127.0.0.1:8080` until Caddy (#11) is in front of it. The app has the Docker socket, which is root on the host, so it is kept minimal.
 - **Terminals** (#9): xterm.js 5.5, served by the web app (fetched at build time, pinned by checksum), not from a CDN. Closing a terminal tab hangs up the shell, because Docker would otherwise keep exec'd shells running.
+- **DS form** (#10): the form takes the line `dnssec-dsfromkey` prints (one or more DS lines, digest type 1, 2 or 4). The app checks the owner name and parses the record itself, so it can say what's wrong, then runs `nsupdate` with the `dnslab-webapp` key inside the master via `docker exec`; the web container stays off `dns-lab`. After each change it flushes the resolver's cache under that zone (`rndc flushtree`), so validation reflects the change at once instead of after `lab.`'s 60 s TTLs.
 - **`just destroy`** backs up first and asks for confirmation; it keeps the images unless asked to remove them.
 - **Credentials:** `just init` generates one password per group plus an instructor password, stored on the host in `state/credentials` (mode 600).
 

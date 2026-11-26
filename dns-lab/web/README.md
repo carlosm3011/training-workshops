@@ -1,6 +1,6 @@
 # Web page
 
-The lab's web page, `dnslab-web`: students log in, see their nodes, open terminals on them, and start, stop or restart them. The UI is in Spanish, like the course. The DS form (#10) comes next.
+The lab's web page, `dnslab-web`: students log in, see their nodes, open terminals on them, and start, stop or restart them, and publish their zone's DS in `lab.`. The UI is in Spanish, like the course.
 
 ## What it does
 
@@ -16,6 +16,15 @@ Clicking a running node's name opens `/terminal/<name>` in a new tab: a root log
 - The websocket needs the same session as the page, the same per-node authorization, and an `Origin` matching the host, so a page on another site can't open a shell even if the browser sent the cookie.
 - **Closing the tab ends the shell.** Docker keeps an exec'd process running when its connection drops, which would leave shells and their jobs behind. So the shell first reports its PID in an OSC escape sequence (`ESC ] 777;dnslab-pid;<pid> BEL`), which the bridge strips from the output. When the websocket closes, the bridge sends that PID SIGHUP (bash passes it on to its jobs), then SIGKILL a second later if it's still there.
 - xterm.js is fetched at image build time from jsDelivr, pinned by SHA-256 (`ADD --checksum` in the Dockerfile), and served by the app, so students' browsers only need to reach the lab.
+
+## DS form
+
+Below the node list, **DS en lab.** works like a registrar's panel for `groupNN.lab.`: it lists the DS records `lab.` serves for the group's zone, takes new ones, and removes them one at a time. The instructor picks any group from a menu.
+
+- **Publishing:** paste the line `dnssec-dsfromkey` prints (`group01.lab. IN DS 31028 13 2 3F8A…`); a TTL, several lines, and `;` comments are fine. The app parses each line with dnspython and refuses, with a message in Spanish, anything whose owner isn't the group's own zone, that isn't a DS, or whose digest doesn't parse or doesn't match its type's length (types 1, 2 and 4). All lines are applied or none are. A DS that is already published is left alone.
+- **Applying:** the app runs `nsupdate -k /etc/bind/dnslab-webapp.key` inside the master (`docker exec`, the script passed as an argument, not through a shell). The master's `update-policy` lets that key change only DS records at `groupNN.lab.` names, a second fence behind the app's own check. Records are added with lab.'s TTL, 60 s.
+- **Seeing the result at once:** after each change the app runs `rndc flushtree groupNN.lab. resolver` on the master, so the lab's resolver drops what it cached under the zone. Otherwise a `dig` just before publishing would keep the zone insecure for up to a minute.
+- **API:** `GET /api/ds/<group>` lists, `POST /api/ds/<group>` with `{"text": "…"}` publishes, `POST /api/ds/<group>/delete` with `{"record": "<key tag> <alg> <type> <digest>"}` removes. A group may only use its own name. Requests are JSON, so a page on another site can't post them without a CORS preflight the app never grants, on top of the SameSite cookie.
 
 ## Authorization
 
@@ -50,7 +59,7 @@ It listens on the host's loopback only. Until Caddy is in front of it (#11), rea
 ssh -N -L 8080:127.0.0.1:8080 kobe.labs.lacnic.net    # then open http://127.0.0.1:8080
 ```
 
-**The Docker socket is root on the host.** Whoever controls this app controls Docker, so the app is deliberately small: it only lists, starts, stops and restarts labelled lab containers, behind the login. Keep it off the Internet without TLS (#11).
+**The Docker socket is root on the host.** Whoever controls this app controls Docker, so the app is deliberately small: it only lists, starts, stops and restarts labelled lab containers, opens shells in them and changes DS records in `lab.`, behind the login. Keep it off the Internet without TLS (#11).
 
 ## Credentials
 
@@ -67,7 +76,14 @@ Passwords are 12 random characters from an alphabet without look-alikes (no `l`,
 
 ## Checking it
 
-`just test-web` brings up the master, groups 1–2 and the web page, then checks login, what each user sees, the buttons, authorization and logout through the same HTTP API the page uses, and tears everything down. It then runs `tests/terminal_check.py` inside the web container, a websocket client that checks the terminals:
+`just test-web` brings up the master, groups 1–2 and the web page, then checks login, what each user sees, the buttons, authorization and logout through the same HTTP API the page uses, and tears everything down. The DS checks sign `group01.lab.` on `group01-0` (with `-1` and `-2` as secondaries), then check:
+- before publishing, `delv-lab` doesn't validate the zone;
+- rejections leave `lab.` unchanged: another group's name or form, a malformed or short digest, NS and A records, garbage;
+- publishing `dnssec-dsfromkey`'s line shows in `dig @10.53.0.1 group01.lab. DS +norec`, and then `delv-lab` reports the zone fully validated;
+- duplicates, a second DS, and removing one or both;
+- the instructor publishing for another group.
+
+It then runs `tests/terminal_check.py` inside the web container, a websocket client that checks the terminals:
 - root shell on the right node, with no PID mark in the output;
 - UTF-8, resize and Ctrl-C (including ending `journalctl -f`);
 - closing the terminal ends the shell and its jobs;

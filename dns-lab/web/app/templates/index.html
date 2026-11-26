@@ -19,5 +19,36 @@
   <tbody><tr><td colspan="6" class="muted">Cargando…</td></tr></tbody>
 </table>
 <p id="message" class="error" hidden></p>
+
+<section id="ds" data-groups="{{ groups | join(' ') }}">
+  <h2>
+    DS en <code>lab.</code>
+    {% if groups | length > 1 %}
+    <select id="ds-group" aria-label="Grupo">
+      {% for g in groups %}<option value="{{ g }}">{{ g }}.lab.</option>{% endfor %}
+    </select>
+    {% else %}
+    para <code>{{ groups[0] }}.lab.</code>
+    {% endif %}
+  </h2>
+  <p class="hint">
+    Como en el panel de un registrador: lo que publiques acá aparece en
+    <code>lab.</code>, la zona padre. Generá el DS en el nodo que firma, con
+    <code>dnssec-dsfromkey</code> sobre el archivo <code>.key</code> de la KSK,
+    y pegá la línea que imprime. Para cambiar un DS, publicá el nuevo antes de
+    quitar el viejo.
+  </p>
+  <table id="ds-records">
+    <thead><tr><th>Key tag</th><th>Algoritmo</th><th>Digest</th><th></th></tr></thead>
+    <tbody><tr><td colspan="4" class="muted">Cargando…</td></tr></tbody>
+  </table>
+  <form id="ds-form">
+    <textarea name="text" rows="2" spellcheck="false" autocomplete="off"
+      placeholder="{{ groups[0] }}.lab. IN DS 12345 13 2 3F8A…"></textarea>
+    <button type="submit">Publicar DS</button>
+  </form>
+  <p id="ds-message" hidden></p>
+</section>
 <script src="/static/app.js"></script>
+<script src="/static/ds.js"></script>
 {% endblock %}
