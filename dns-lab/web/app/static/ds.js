@@ -22,7 +22,7 @@ function dsShow(text, isError) {
 function dsRender(records) {
   const tbody = document.querySelector("#ds-records tbody");
   if (!records.length) {
-    const td = cell("Ningún DS publicado: la zona no tiene cadena de confianza desde lab.", "muted");
+    const td = cell("Ningún DS publicado: lab. no ofrece cadena de confianza hacia la zona.", "muted");
     td.colSpan = 4;
     const tr = document.createElement("tr");
     tr.append(td);

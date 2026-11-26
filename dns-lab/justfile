@@ -315,7 +315,7 @@ test-web: build
     ok "group01-0 signs group01.lab. (KSK $tag); no DS in lab. yet"
     ! validated && ok "without a DS, delv-lab doesn't validate group01.lab." || fail "validated without a DS"
     other=${ksk/group01.lab./group02.lab.}
-    for case in "other group's name|$other|solo podés publicar DS para group01.lab." \
+    for case in "other group's name|$other|Solo podés publicar DS para group01.lab." \
                 "malformed digest|group01.lab. IN DS $tag 13 2 XYZ|no es válido" \
                 "short digest|group01.lab. IN DS $tag 13 2 0123ABCD|no es válido" \
                 "NS record|group01.lab. IN NS ns.evil.example.|no DS" \

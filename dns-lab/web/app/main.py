@@ -233,7 +233,7 @@ def parse_ds_line(line: str, zone: dns.name.Name):
     if rest[0].upper() != "DS":
         raise DSError(f"Es un registro {rest[0].upper()}, no DS. Pegá la salida de dnssec-dsfromkey.")
     if owner != zone:
-        raise DSError(f"El DS es para {owner.to_text()}, pero solo podés publicar DS para {zone.to_text()}.")
+        raise DSError(f"Solo podés publicar DS para {zone.to_text()} y este es para {owner.to_text()}")
     try:
         rd = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DS, " ".join(rest[1:]))
     except dns.exception.DNSException as e:
