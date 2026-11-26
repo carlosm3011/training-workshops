@@ -57,7 +57,8 @@ init: _check
     found=$(just _existing)
     if [ -n "$found" ]; then
         echo "A dns-lab environment already exists on this host; init changed nothing." >&2
-        echo "$found" | sed 's/^/  /' >&2
+        echo "$found" | head -5 | sed 's/^/  /' >&2
+        n=$(echo "$found" | wc -l); (( n <= 5 )) || echo "  … and $(( n - 5 )) more" >&2
         echo "See 'just status'; remove it with 'just destroy' first." >&2
         exit 1
     fi
