@@ -102,9 +102,12 @@ destroy: _check
         if [ "{{images}}" = true ]; then just _rmi; fi
         exit 0
     fi
+    list() { echo "$found" | sed -n "s/^$1 //p" | sort -V | tr '\n' ' '; }
     echo "This removes the dns-lab environment on this host:"
-    echo "$found" | sed 's/^/  /'
-    echo "and everything under {{state}} except backups/.{{ if images == "true" { " Also the lab images." } else { "" } }}"
+    echo "  containers ($(echo "$found" | grep -c '^container ' || true)): $(list container)"
+    echo "  networks: $(list network)"
+    echo "  everything under {{state}} except backups/"
+    if [ "{{images}}" = true ]; then echo "  the lab images"; fi
     if [ "{{skip_backup}}" != true ]; then echo "It runs 'just backup' first."; else echo "No backup (skip_backup=true)."; fi
     if [ "{{yes}}" != true ]; then
         read -r -p "Type yes to go ahead: " answer || true
