@@ -54,7 +54,8 @@ default:
 init: _check
     #!/usr/bin/env bash
     set -euo pipefail
-    if found=$(just _existing); then
+    found=$(just _existing)
+    if [ -n "$found" ]; then
         echo "A dns-lab environment already exists on this host; init changed nothing." >&2
         echo "$found" | sed 's/^/  /' >&2
         echo "See 'just status'; remove it with 'just destroy' first." >&2
@@ -481,7 +482,8 @@ test-https: build
 test-init: build
     #!/usr/bin/env bash
     set -euo pipefail
-    if found=$(just _existing); then
+    found=$(just _existing)
+    if [ -n "$found" ]; then
         echo "test-init needs a host without an environment; found:" >&2; echo "$found" >&2; exit 1
     fi
     trap 'just _teardown' EXIT
@@ -494,7 +496,7 @@ test-init: build
     have=$(docker ps --format '{{{{.Names}}' | grep -E '^(dnslab-|group)' | sort | tr '\n' ' ' | sed 's/ $//')
     [ "$have" = "$want" ] && ok "init with groups=2 runs exactly: $have" || fail "running: $have"
     for g in group01 group02; do
-        [ "$(x dig +short +norec @{{master4}} $g.lab. NS | wc -l)" = 3 ] || fail "$g.lab. not delegated"
+        [ "$(x dig +norec @{{master4}} $g.lab. NS | grep -cE "^$g\.lab\.\s.*\sNS\s")" = 3 ] || fail "$g.lab. not delegated"
     done
     x dig +norec @{{master4}} group03.lab. NS | grep 'status: NXDOMAIN' >/dev/null || fail "group03.lab. exists"
     ok "lab. delegates group01.lab. and group02.lab. (3 NS each); group03.lab. is NXDOMAIN"
@@ -527,16 +529,18 @@ test-init: build
     echo "all init checks passed"
 
 # Print what of an environment exists on this host (containers, networks,
-# state files) and succeed if anything does. State backups don't count.
+# state files), one per line; nothing if none. State backups don't count.
 [private]
 _existing:
     #!/usr/bin/env bash
-    set -uo pipefail
-    found=0
-    for c in $(docker ps -a --filter label=dnslab.role --format '{{{{.Names}}'); do echo "container $c"; found=1; done
-    for n in {{network}} {{uplink}} {{front}}; do docker network inspect "$n" >/dev/null 2>&1 && { echo "network $n"; found=1; }; done
-    for f in env master nodes shared credentials web caddy; do [ -e "{{state}}/$f" ] && { echo "state {{state}}/$f"; found=1; }; done
-    [ $found = 1 ]
+    set -euo pipefail
+    for c in $(docker ps -a --filter label=dnslab.role --format '{{{{.Names}}'); do echo "container $c"; done
+    for n in {{network}} {{uplink}} {{front}}; do
+        if docker network inspect "$n" >/dev/null 2>&1; then echo "network $n"; fi
+    done
+    for f in env master nodes shared credentials web caddy; do
+        if [ -e "{{state}}/$f" ]; then echo "state {{state}}/$f"; fi
+    done
 
 # Remove every lab container, the networks and the environment's state,
 # keeping state/backups. Used by test-init; destroy (#7) adds backup and confirmation.
