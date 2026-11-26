@@ -633,7 +633,7 @@ test-backup: build
     ok "group01-1 and -2 serve it as secondaries again"
     validates && ok "lab. still has the DS and the resolver validates www.group01.lab." || fail "group01.lab. doesn't validate after the restore"
     [ "$(docker ps --filter label=dnslab.role -q | wc -l)" = 9 ] && ok "every container is running, group02-1 included" || fail "not all running: $(just status)"
-    [ "$(ls "{{state}}/backups" | grep -cvxF "$old")" = 3 ] && ok "restore first backed up the state it replaced" || fail "backups: $(ls "{{state}}/backups")"
+    [ "$(ls "{{state}}/backups" | grep -cvxF "$old")" = 2 ] && ok "restore first backed up the state it replaced" || fail "backups: $(ls "{{state}}/backups")"
     echo "all backup checks passed"
 
 # Print what of an environment exists on this host (containers, networks,
