@@ -11,7 +11,8 @@ just test-node    # boot a throwaway node and run the checks from issue #2
 
 ## What's inside
 
-- **Packages:** `bind9`, `bind9-utils` (named-checkconf/zone, dnssec-keygen/signzone/verify/settime/dsfromkey, rndc), `bind9-dnsutils` (dig, delv, nsupdate), `ldnsutils` (drill), plus iproute2, ping, tcpdump, curl, vim, nano and less.
+- **Packages:** `bind9`, `bind9-utils` (named-checkconf/zone, dnssec-keygen/signzone/verify/settime/dsfromkey, rndc), `bind9-dnsutils` (dig, delv, nsupdate), `ldnsutils` (drill), plus iproute2, ping, net-tools (ifconfig, netstat, route), tcpdump, curl, vim, nano, less and htop.
+- **apt works as is:** the image keeps apt's package lists from build time, so `apt install <package>` works on a node without `apt update` first (nodes reach the mirrors through the master's NAT). The lists age with the image: if apt reports a 404, run `apt update`, or rebuild with `just build` before a course.
 - **systemd** trimmed for a container: consoles, udev, networkd, resolved, timesyncd and logind are masked.
 - **BIND is installed but blank:** Ubuntu's stock `/etc/bind` and no zones of ours. `named.service`, also reachable as `bind9`, is enabled.
 
