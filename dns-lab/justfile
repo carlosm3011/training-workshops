@@ -13,6 +13,10 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 groups := env("DNSLAB_GROUPS", "6")
 # Public name of the lab host: the web page's URL and certificate.
 host := env("DNSLAB_HOST", "kobe.labs.lacnic.net")
+# destroy's options: don't back up first, don't ask, also remove the images.
+skip_backup := "false"
+yes := "false"
+images := "false"
 
 network := "dns-lab"
 state := justfile_directory() / "state"
@@ -88,12 +92,34 @@ init: _check
     echo "  just cert          the certificate's fingerprint (self-signed until #11)"
     echo "  just status        containers and addresses"
 
-# Remove the environment completely (backs up first).
+# Remove the environment completely, after confirmation and a backup (skip_backup=true, yes=true, images=true).
 destroy: _check
-    @echo "destroy (not implemented yet, see #7) would, on {{host}}:"
-    @echo "  - run 'just backup', then ask for confirmation"
-    @echo "  - remove the master, every groupNN-N node, the web page and Caddy"
-    @echo "  - remove the {{network}} network and {{state}}, except {{state}}/backups"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    found=$(just _existing)
+    if [ -z "$found" ]; then
+        echo "No dns-lab environment on this host; nothing to destroy."
+        if [ "{{images}}" = true ]; then just _rmi; fi
+        exit 0
+    fi
+    list() { echo "$found" | sed -n "s/^$1 //p" | sort -V | tr '\n' ' '; }
+    echo "This removes the dns-lab environment on this host:"
+    echo "  containers ($(echo "$found" | grep -c '^container ' || true)): $(list container)"
+    echo "  networks: $(list network)"
+    echo "  everything under {{state}} except backups/"
+    if [ "{{images}}" = true ]; then echo "  the lab images"; fi
+    if [ "{{skip_backup}}" != true ]; then echo "It runs 'just backup' first."; else echo "No backup (skip_backup=true)."; fi
+    if [ "{{yes}}" != true ]; then
+        read -r -p "Type yes to go ahead: " answer || true
+        [ "${answer:-}" = yes ] || { echo "destroy cancelled; nothing changed." >&2; exit 1; }
+    fi
+    if [ "{{skip_backup}}" != true ]; then
+        if [ -r "{{state}}/env" ]; then just backup
+        else echo "No {{state}}/env (an incomplete init?), so no backup." >&2; fi
+    fi
+    just _teardown
+    if [ "{{images}}" = true ]; then just _rmi; fi
+    echo "destroyed the environment; backups are kept in {{state}}/backups"
 
 # Save every node's config, zones and keys, the master's state and the credentials to state/backups.
 backup: _check
@@ -636,6 +662,67 @@ test-backup: build
     [ "$(ls "{{state}}/backups" | grep -cvxF "$old")" = 2 ] && ok "restore first backed up the state it replaced" || fail "backups: $(ls "{{state}}/backups")"
     echo "all backup checks passed"
 
+# Check destroy: no environment, answering no, destroy with backup, init again, skip_backup/yes/images; removes the images.
+test-destroy: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    found=$(just _existing)
+    if [ -n "$found" ]; then
+        echo "test-destroy needs a host without an environment; found:" >&2; echo "$found" >&2; exit 1
+    fi
+    mkdir -p "{{state}}/backups"
+    old=$(ls "{{state}}/backups")
+    new() { ls "{{state}}/backups" | grep -vxF "$old" || true; }
+    cleanup() {
+        just _teardown
+        for f in $(new); do rm -f "{{state}}/backups/$f"; done
+    }
+    trap cleanup EXIT
+    ok() { echo "ok   $*"; }
+    fail() { echo "FAIL $*" >&2; exit 1; }
+    gone() {
+        [ -z "$(docker ps -aq --filter label=dnslab.role)" ] && ! docker network ls --format '{{{{.Name}}' | grep '^dns-lab' >/dev/null \
+            && [ "$(ls -A "{{state}}")" = backups ]
+    }
+
+    out=$(just destroy </dev/null) && echo "$out" | grep 'nothing to destroy' >/dev/null \
+        && ok "with no environment, destroy exits 0: $out" || fail "destroy with no environment: $out"
+
+    just groups=2 init >/dev/null
+    echo marker | docker exec -i group01-0 tee /etc/bind/dnslab-test-marker >/dev/null
+    snapshot() {
+        docker ps -a --filter label=dnslab.role --format '{{{{.ID}}' | sort | xargs docker inspect -f '{{{{.Name}} {{{{.State.StartedAt}}'
+        docker network ls --format '{{{{.ID}} {{{{.Name}}' | grep dns-lab
+        sudo find "{{state}}" -path "{{state}}/backups" -prune -o -type f -print0 | sort -z | sudo xargs -0 sha256sum
+    }
+    before=$(snapshot)
+    if out=$(echo no | just destroy 2>&1); then fail "destroy went ahead after 'no'"; fi
+    echo "$out" | grep 'destroy cancelled; nothing changed' >/dev/null && [ "$(snapshot)" = "$before" ] && [ -z "$(new)" ] \
+        && ok "answering no cancels: environment untouched, no backup" || fail "after no: $out"
+    if just destroy </dev/null >/dev/null 2>&1; then fail "destroy went ahead with no answer"; fi
+    ok "no answer (stdin closed) cancels too"
+
+    out=$(echo yes | just destroy)
+    echo "$out" | sed 's/^/     /'
+    gone && ok "after destroy: no lab containers or networks, only backups/ under state/" || fail "left behind: $(just _existing; ls -A "{{state}}")"
+    [ "$(new | wc -l)" = 1 ] && tar -tzf "{{state}}/backups/$(new)" | grep -xF nodes/group01-0/etc-bind/dnslab-test-marker >/dev/null \
+        && ok "destroy backed up first: $(new) has group01-0's files" || fail "no backup with the environment's files: $(new)"
+    docker image inspect {{node_image}} {{master_image}} {{web_image}} {{caddy_image}} >/dev/null && ok "images kept" || fail "images removed"
+
+    just groups=2 init >/dev/null
+    ! docker exec group01-0 test -e /etc/bind/dnslab-test-marker \
+        && docker exec group01-0 dig @{{master4}} lab. SOA | grep -E '^;; flags:.* ad[ ;]' >/dev/null \
+        && [ "$(docker ps -q --filter label=dnslab.role | wc -l)" = 9 ] \
+        && ok "init after destroy: a fresh environment, 9 containers running, lab. validates" || fail "init after destroy"
+
+    n=$(new | wc -l)
+    just skip_backup=true yes=true images=true destroy </dev/null | sed 's/^/     /'
+    gone && [ "$(new | wc -l)" = "$n" ] && ok "destroy skip_backup=true yes=true: no prompt, no backup, all gone" || fail "skip_backup/yes"
+    ! docker image inspect {{node_image}} >/dev/null 2>&1 && ! docker image inspect {{master_image}} >/dev/null 2>&1 \
+        && ! docker image inspect {{web_image}} >/dev/null 2>&1 && ! docker image inspect {{caddy_image}} >/dev/null 2>&1 \
+        && ok "images=true removed the lab images" || fail "images left"
+    echo "all destroy checks passed"
+
 # Print what of an environment exists on this host (containers, networks,
 # state files), one per line; nothing if none. State backups don't count.
 [private]
@@ -650,8 +737,8 @@ _existing:
         if [ -e "{{state}}/$f" ]; then echo "state {{state}}/$f"; fi
     done
 
-# Remove every lab container, the networks and the environment's state,
-# keeping state/backups. Used by test-init; destroy (#7) adds backup and confirmation.
+# Remove every lab container, the networks and everything under state/
+# except backups/. destroy wraps it with a confirmation and a backup.
 [private]
 _teardown:
     #!/usr/bin/env bash
@@ -659,7 +746,16 @@ _teardown:
     ids=$(docker ps -aq --filter label=dnslab.role)
     [ -z "$ids" ] || docker rm -f $ids >/dev/null
     docker network rm {{network}} {{uplink}} {{front}} >/dev/null 2>&1 || true
-    for f in {{state_items}}; do sudo rm -rf "{{state}}/$f"; done
+    [ ! -d "{{state}}" ] || sudo find "{{state}}" -mindepth 1 -maxdepth 1 ! -name backups -exec rm -rf {} +
+
+# Remove the lab images (destroy images=true); init builds or pulls them again.
+[private]
+_rmi:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for i in {{master_image}} {{web_image}} {{node_image}} {{caddy_image}}; do
+        if docker image inspect "$i" >/dev/null 2>&1; then docker rmi "$i" >/dev/null; echo "removed image $i"; fi
+    done
 
 # Create the internal dns-lab network, the master's uplink and the web front network, if missing.
 [private]

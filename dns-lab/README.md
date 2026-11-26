@@ -4,7 +4,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls, terminals and DS form, served over HTTPS by Caddy with a self-signed certificate. `just init` brings up a complete environment, and `just backup` and `just restore` save and put back what students produced. `destroy` still only prints what it will do.
+> **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls, terminals and DS form, served over HTTPS by Caddy with a self-signed certificate. `just init` brings up a complete environment, and `just backup` and `just restore` save and put back what students produced, and `just destroy` removes an environment.
 
 ## Usage
 
@@ -18,7 +18,7 @@ just credentials    # print the web page's passwords
 just cert           # print the web page's certificate: path, expiry, SHA-256 fingerprint
 just backup         # save every node's config, zones and keys, the master's state and the passwords
 just restore FILE   # put a backup back into a matching environment
-just destroy        # back up, then remove the environment completely
+just destroy        # ask, back up, then remove the environment completely
 just build          # build the lab images
 just test-node      # boot a throwaway node and check it
 just test-net       # bring up master + 2 groups, check addressing and routing, tear down
@@ -26,6 +26,7 @@ just test-master    # bring up master + group01, check lab., the resolver and DS
 just test-web       # bring up master + 2 groups + web page, check login, controls, DS form, terminals and authorization, tear down
 just test-https     # bring up master + group01-0 + web page + Caddy, check HTTPS, tear down
 just test-init      # run the real init with 2 groups, check it and status, tear down
+just test-destroy   # destroy with no environment, answering no, destroy + init again, options; removes the images
 just test-backup    # init, sign a group zone, back up, tear down, init, restore, check it validates, tear down
 ```
 
@@ -35,7 +36,12 @@ just test-backup    # init, sign a group zone, back up, tear down, init, restore
 - it starts the nodes, the web page and Caddy;
 - it records the group count and host in `state/env`.
 
-It refuses to run, and changes nothing, if any part of an environment exists: lab containers, the networks, or state files other than backups. `just status` lists every lab container with its state and fixed addresses; stopped nodes show their addresses too. Until `just destroy` exists (#7), `just _teardown` removes an environment: containers, networks and `state/`, except `state/backups/`.
+It refuses to run, and changes nothing, if any part of an environment exists: lab containers, the networks, or state files other than backups. `just status` lists every lab container with its state and fixed addresses; stopped nodes show their addresses too. `just destroy` removes it:
+- it lists what it will remove and asks you to type `yes`; any other answer, or no answer, changes nothing;
+- it runs `just backup`, then removes every lab container, the three networks, and everything under `state/` except `state/backups/`;
+- it keeps the images, so the next `init` starts in seconds.
+
+Options: `just yes=true destroy` doesn't ask, `skip_backup=true` doesn't back up, `images=true` also removes the lab images (`init` builds or pulls them again). With no environment, it says so and exits.
 
 The `test-*` recipes (except `test-node`) use the real names (`dns-lab`, `dnslab-master`, `group01-0` …), so it refuses to run while an environment exists.
 
