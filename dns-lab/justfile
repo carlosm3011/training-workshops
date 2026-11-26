@@ -413,7 +413,7 @@ test-https: build
     [ "$(c -o "$tmp/page" -w '%{http_code}' https://{{host}}/login)" = 200 ] && grep 'Ingresar' "$tmp/page" >/dev/null \
         && ok "https://{{host}}/login serves the login page; the certificate verifies against $cert" || fail "HTTPS login page"
     [ "$(served_fp)" = "$file_fp" ] && ok "Caddy serves the self-signed certificate (${file_fp#*=})" || fail "served certificate differs"
-    read -r code loc < <(c -o /dev/null -w '%{http_code} %{redirect_url}' http://{{host}}/login)
+    read -r code loc < <(c -o /dev/null -w '%{http_code} %{redirect_url}\n' http://{{host}}/login)
     [[ "$code" =~ ^30[178]$ ]] && [ "$loc" = "https://{{host}}/login" ] \
         && ok "http:// redirects to https:// ($code)" || fail "no redirect: $code $loc"
 
