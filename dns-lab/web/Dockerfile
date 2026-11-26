@@ -1,6 +1,6 @@
 # The lab web page (see README.md). Runs with the host's Docker socket
-# mounted, so it can list and start/stop the lab's containers; it is not
-# attached to the dns-lab network.
+# mounted, so it can manage the lab's containers and run nsupdate in the
+# master with docker exec; it is not attached to the dns-lab network.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

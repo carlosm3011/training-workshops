@@ -49,7 +49,7 @@ send
 EOF
 ```
 
-The web page's DS form (#10) does this; the key stays on the master (`state/master/etc-bind/dnslab-webapp.key` on the host) and is never visible to the nodes.
+The web page's DS form (#10) does this, running `nsupdate` inside the master with `docker exec`, then `rndc flushtree groupNN.lab. resolver` so the resolver forgets the old answers. The key stays on the master (`state/master/etc-bind/dnslab-webapp.key` on the host) and is never visible to the nodes.
 
 ## Run flags
 
