@@ -50,15 +50,41 @@ node_run_flags := "--cgroupns=private --cap-add SYS_ADMIN --cap-add NET_ADMIN --
 default:
     @just --list --unsorted
 
-# Create a new environment: network, master, nodes, web page.
+# Create a new environment: network, master, nodes, web page, Caddy.
 init: _check
-    @echo "init (not implemented yet, see #5) would, on {{host}}:"
-    @echo "  - build the node and master images if missing (#2, #4)"
-    @echo "  - create the {{network}} network with fixed IPv4/IPv6 addressing (#3)"
-    @echo "  - start the master: NAT gateway, lab. parent zone, validating resolver (#4)"
-    @echo "  - start {{groups}} groups x 3 nodes: $(just groups={{groups}} _nodes | tr '\n' ' ')"
-    @echo "  - generate credentials in {{state}}/credentials"
-    @echo "  - start the web page behind Caddy at https://{{host}} (#8, #11)"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    found=$(just _existing)
+    if [ -n "$found" ]; then
+        echo "A dns-lab environment already exists on this host; init changed nothing." >&2
+        echo "$found" | head -5 | sed 's/^/  /' >&2
+        n=$(echo "$found" | wc -l); (( n <= 5 )) || echo "  … and $(( n - 5 )) more" >&2
+        echo "See 'just status'; remove it with 'just destroy' first." >&2
+        exit 1
+    fi
+    trap 'echo "init failed; the environment is incomplete. See just status." >&2' ERR
+    for image in {{node_image}}:images/node {{master_image}}:images/master {{web_image}}:web; do
+        docker image inspect "${image%%:*}" >/dev/null 2>&1 || docker build -q -t "${image%%:*}" "${image#*:}" >/dev/null
+    done
+    docker image inspect {{caddy_image}} >/dev/null 2>&1 || docker pull -q {{caddy_image}} >/dev/null
+    echo "images ready"
+    just _network >/dev/null
+    echo "created networks {{network}} ({{lab4}}, {{lab6}}), {{uplink}}, {{front}}"
+    mkdir -p "{{state}}"
+    printf 'DNSLAB_GROUPS=%s\nDNSLAB_HOST=%s\n' {{groups}} {{host}} > "{{state}}/env"
+    just groups={{groups}} _master
+    for g in $(seq 1 {{groups}}); do for n in 0 1 2; do just _node "{{state}}" $g $n; done; done
+    for c in $(just groups={{groups}} _nodes); do just _wait "$c"; done
+    echo "every node's named is up"
+    just groups={{groups}} _credentials
+    just _web
+    just host={{host}} _cert
+    just host={{host}} _caddy
+    echo
+    echo "Environment ready: {{groups}} groups on https://{{host}}/"
+    echo "  just credentials   the passwords to hand out"
+    echo "  just cert          the certificate's fingerprint (self-signed until #11)"
+    echo "  just status        containers and addresses"
 
 # Remove the environment completely (backs up first).
 destroy: _check
@@ -73,14 +99,24 @@ backup: _check
     @echo "  - archive each node's bind mount under {{state}}/nodes, the master's state"
     @echo "    and the credentials into {{state}}/backups/dns-lab-{{host}}-<timestamp>.tar.gz"
 
-# Show the parameters and, once implemented, every container's state.
+# Show the environment's parameters and every lab container's state and addresses.
 status: _check
-    @echo "host:    {{host}}"
-    @echo "groups:  {{groups}} ($(( {{groups}} * 3 )) nodes + master)"
-    @echo "network: {{network}}"
-    @echo "state:   {{state}}"
-    @echo "nodes:   $(just groups={{groups}} _nodes | tr '\n' ' ')"
-    @echo "(container states: not implemented yet, see #5)"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -r "{{state}}/env" ]; then
+        . "{{state}}/env"
+        echo "environment: $DNSLAB_GROUPS groups on https://$DNSLAB_HOST/ (state in {{state}})"
+    else
+        echo "no environment created by 'just init' here (parameters: {{groups}} groups, host {{host}})"
+    fi
+    names=$(docker ps -a --filter label=dnslab.role --format '{{{{.Names}}' | sort)
+    if [ -z "$names" ]; then echo "no lab containers on this host"; exit 0; fi
+    # master first, then nodes, then web and Caddy
+    names=$(echo "$names" | awk '/^dnslab-master$/ { print 0, $0; next } /^group/ { print 1, $0; next } { print 2, $0 }' | sort | cut -d' ' -f2)
+    printf '%-15s %-10s %-12s %s\n' CONTAINER STATE IPV4 IPV6
+    # The fixed addresses given at creation, so stopped containers show them too
+    docker inspect -f '{{{{.Name}} {{{{.State.Status}} {{{{with index .NetworkSettings.Networks "{{network}}"}}{{{{with .IPAMConfig}}{{{{.IPv4Address}} {{{{.IPv6Address}}{{{{end}}{{{{end}}' $names \
+        | while read -r name state v4 v6; do printf '%-15s %-10s %-12s %s\n' "${name#/}" "$state" "${v4:--}" "${v6:--}"; done
 
 # Print the web page's certificate: its path, names, expiry and fingerprint.
 cert:
@@ -443,6 +479,81 @@ test-https: build
     [ "$(probe --resolve {{host}}:443:"$hostip" https://{{host}}/login)" = 200 ] && [ "$(probe http://"$hostip":{{web_port}}/login)" = 000 ] \
         && ok "from outside the host ($hostip): 443 answers, {{web_port}} doesn't" || fail "port {{web_port}} reachable on $hostip"
     echo "all https checks passed"
+
+# Run the real `init` with 2 groups, check it, `status` and a second `init`; tear down (keeps state/backups).
+test-init: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    found=$(just _existing)
+    if [ -n "$found" ]; then
+        echo "test-init needs a host without an environment; found:" >&2; echo "$found" >&2; exit 1
+    fi
+    trap 'just _teardown' EXIT
+    ok() { echo "ok   $*"; }
+    fail() { echo "FAIL $*" >&2; exit 1; }
+    x() { docker exec group01-0 "$@"; }
+    just groups=2 init
+
+    want="dnslab-caddy dnslab-master dnslab-web group01-0 group01-1 group01-2 group02-0 group02-1 group02-2"
+    have=$(docker ps --format '{{{{.Names}}' | grep -E '^(dnslab-|group)' | sort | tr '\n' ' ' | sed 's/ $//')
+    [ "$have" = "$want" ] && ok "init with groups=2 runs exactly: $have" || fail "running: $have"
+    for g in group01 group02; do
+        [ "$(x dig +norec @{{master4}} $g.lab. NS | grep -cE "^$g\.lab\.\s.*\sNS\s")" = 3 ] || fail "$g.lab. not delegated"
+    done
+    x dig +norec @{{master4}} group03.lab. NS | grep 'status: NXDOMAIN' >/dev/null || fail "group03.lab. exists"
+    ok "lab. delegates group01.lab. and group02.lab. (3 NS each); group03.lab. is NXDOMAIN"
+    x dig @{{master4}} lab. SOA | grep -E '^;; flags:.* ad[ ;]' >/dev/null && ok "the resolver validates lab." || fail "lab. not validated"
+
+    [ "$(stat -c %a "{{state}}/credentials")" = 600 ] \
+        && [ "$(awk '!/^#/ { print $1 }' "{{state}}/credentials" | tr '\n' ' ')" = "instructor group01 group02 " ] \
+        && ok "state/credentials: mode 600, instructor, group01, group02" || fail "credentials: $(ls -l "{{state}}/credentials")"
+    [ "$(just credentials | grep -c '^group')" = 2 ] && ok "just credentials prints them" || fail "just credentials"
+    [ "$(curl -s -o /dev/null -w '%{http_code}' --resolve {{host}}:443:127.0.0.1 --cacert "{{state}}/caddy/cert.pem" https://{{host}}/login)" = 200 ] \
+        && ok "https://{{host}}/ serves the login page" || fail "web page over HTTPS"
+
+    out=$(just status)
+    for c in $want; do echo "$out" | grep -E "^$c +running " >/dev/null || fail "status doesn't show $c running: $out"; done
+    echo "$out" | grep -E '^dnslab-master +running +10\.53\.0\.1 +fd53::1$' >/dev/null \
+        && echo "$out" | grep -E '^group02-2 +running +10\.53\.2\.12 +fd53::2:12$' >/dev/null \
+        && echo "$out" | grep '2 groups on https://{{host}}/' >/dev/null \
+        && ok "just status lists every container with its state and addresses" || fail "status: $out"
+    echo "$out" | sed 's/^/     /'
+
+    snapshot() {
+        docker ps -a --filter label=dnslab.role --format '{{{{.ID}}' | sort | xargs docker inspect -f '{{{{.Name}} {{{{.State.StartedAt}}'
+        docker network ls --format '{{{{.ID}} {{{{.Name}}' | grep dns-lab
+        sudo sha256sum "{{state}}/env" "{{state}}/credentials" "{{state}}/master/etc-bind/named.conf.lab" "{{state}}/caddy/cert.pem"
+    }
+    before=$(snapshot)
+    if msg=$(just groups=3 init 2>&1); then fail "second init succeeded"; fi
+    echo "$msg" | grep 'already exists on this host; init changed nothing' >/dev/null && [ "$(snapshot)" = "$before" ] \
+        && ok "a second init (even with groups=3) refuses with a message and changes nothing" || fail "second init: $msg"
+    echo "all init checks passed"
+
+# Print what of an environment exists on this host (containers, networks,
+# state files), one per line; nothing if none. State backups don't count.
+[private]
+_existing:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for c in $(docker ps -a --filter label=dnslab.role --format '{{{{.Names}}'); do echo "container $c"; done
+    for n in {{network}} {{uplink}} {{front}}; do
+        if docker network inspect "$n" >/dev/null 2>&1; then echo "network $n"; fi
+    done
+    for f in env master nodes shared credentials web caddy; do
+        if [ -e "{{state}}/$f" ]; then echo "state {{state}}/$f"; fi
+    done
+
+# Remove every lab container, the networks and the environment's state,
+# keeping state/backups. Used by test-init; destroy (#7) adds backup and confirmation.
+[private]
+_teardown:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ids=$(docker ps -aq --filter label=dnslab.role)
+    [ -z "$ids" ] || docker rm -f $ids >/dev/null
+    docker network rm {{network}} {{uplink}} {{front}} >/dev/null 2>&1 || true
+    for f in env master nodes shared credentials web caddy; do sudo rm -rf "{{state}}/$f"; done
 
 # Create the internal dns-lab network, the master's uplink and the web front network, if missing.
 [private]
