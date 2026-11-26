@@ -203,45 +203,7 @@ test-master: build
         && ok "unsigned update refused" || fail "unsigned update accepted"
 
     # 6. a group signs its zone and publishes its DS: validated; wrong DS: SERVFAIL.
-    # As in modules 3-4: group01-0 signs, group01-1 and -2 are secondaries,
-    # so every server the delegation points to answers for the zone.
-    x -i group01-0 bash -s <<'EOF'
-    set -e
-    cat >> /etc/bind/named.conf.local <<'C'
-    zone "group01.lab" { type primary; file "/var/lib/bind/db.group01.lab"; dnssec-policy default; inline-signing yes;
-        allow-transfer { 10.53.1.0/24; }; also-notify { 10.53.1.11; 10.53.1.12; }; };
-    C
-    cat > /var/lib/bind/db.group01.lab <<'Z'
-    $TTL 60
-    @    SOA ns0.group01.lab. hostmaster.group01.lab. 1 300 60 86400 60
-    @    NS  ns0
-    @    NS  ns1
-    @    NS  ns2
-    ns0  A   10.53.1.10
-    ns1  A   10.53.1.11
-    ns2  A   10.53.1.12
-    www  A   10.53.1.10
-    Z
-    chown bind:bind /var/lib/bind/db.group01.lab
-    rndc reconfig
-    EOF
-    for _ in $(seq 30); do
-        ds=$(x group01-0 dig +norec @127.0.0.1 group01.lab. DNSKEY | x -i group01-0 dnssec-dsfromkey -2 -f - group01.lab. 2>/dev/null | head -1) || true
-        [ -n "$ds" ] && break; sleep 1
-    done
-    [ -n "$ds" ] || fail "group01-0 didn't sign group01.lab."
-    for n in 1 2; do
-        printf 'zone "group01.lab" { type secondary; primaries { 10.53.1.10; }; file "/var/cache/bind/db.group01.lab"; };\n' \
-            | x -i group01-$n tee -a /etc/bind/named.conf.local >/dev/null
-        x group01-$n rndc reconfig
-    done
-    want=$(x group01-0 dig +short +norec @127.0.0.1 group01.lab. SOA | awk '{print $3}')
-    for n in 1 2; do
-        for _ in $(seq 30); do
-            [ "$(x group01-$n dig +short +norec @127.0.0.1 group01.lab. SOA | awk '{print $3}')" = "$want" ] && break; sleep 1
-        done
-        x group01-$n dig +norec @127.0.0.1 group01.lab. DNSKEY | grep -q DNSKEY || fail "group01-$n didn't transfer group01.lab."
-    done
+    ds=$(just _group_zone 1)
     ok "group01-0 signs group01.lab.; group01-1 and -2 serve it as secondaries"
     printf 'update add %s\nsend\n' "$(echo "$ds" | sed 's/ IN / 60 IN /')" | update
     out=$(x group01-0 dig @{{master4}} www.group01.lab. A +dnssec)
@@ -265,7 +227,7 @@ test-master: build
         || fail "wrong DS didn't break validation: $(echo "$out" | grep -E 'status|flags'); DS in lab.: $(x group01-0 dig +short +norec @{{master4}} group01.lab. DS)"
     echo "all master checks passed"
 
-# Bring up master, groups 1-2 and the web page; check login, controls, terminals and authorization; tear down.
+# Bring up master, groups 1-2 and the web page; check login, controls, DS form, terminals and authorization; tear down.
 test-web: build
     #!/usr/bin/env bash
     set -euo pipefail
@@ -339,6 +301,61 @@ test-web: build
 
     api instructor POST /api/nodes/group02-2/restart >/dev/null
     [ "$(cat "$tmp/status")" = 200 ] && ok "instructor can restart another group's node" || fail "instructor restart: $(cat "$tmp/status")"
+
+    # DS form (#10), through the same API the page uses
+    # ds USER GROUP KEY VALUE [/delete] -> body; POSTs {"KEY": VALUE} to /api/ds/GROUP[/delete]
+    ds() { curl -s -o "$tmp/body" -w '%{http_code}' -b "$tmp/$1" -H 'Content-Type: application/json' \
+        --data "$(python3 -c 'import json, sys; print(json.dumps({sys.argv[1]: sys.argv[2]}))' "$3" "$4")" \
+        "$url/api/ds/$2${5:-}" > "$tmp/status"; cat "$tmp/body"; }
+    detail() { python3 -c 'import json, sys; print(json.load(sys.stdin).get("detail", ""))'; }
+    lab_ds() { docker exec group01-0 dig @{{master4}} "$1" DS +norec +short; }
+    validated() { docker exec group01-0 delv-lab @{{master4}} group01.lab. SOA 2>&1 | grep 'fully validated' >/dev/null; }
+    ksk=$(just _group_zone 1)
+    tag=$(echo "$ksk" | awk '{print $4}')
+    ok "group01-0 signs group01.lab. (KSK $tag); no DS in lab. yet"
+    ! validated && ok "without a DS, delv-lab doesn't validate group01.lab." || fail "validated without a DS"
+    other=${ksk/group01.lab./group02.lab.}
+    for case in "other group's name|$other|solo podés publicar DS para group01.lab." \
+                "malformed digest|group01.lab. IN DS $tag 13 2 XYZ|no es válido" \
+                "short digest|group01.lab. IN DS $tag 13 2 0123ABCD|no es válido" \
+                "NS record|group01.lab. IN NS ns.evil.example.|no DS" \
+                "A record|group01.lab. 60 IN A 192.0.2.1|no DS" \
+                "garbage|hola|No es un registro DS"; do
+        IFS='|' read -r why line want <<<"$case"
+        msg=$(ds group01 group01 text "$line" | detail)
+        [ "$(cat "$tmp/status")" = 400 ] && [[ "$msg" == *"$want"* ]] || fail "$why: got $(cat "$tmp/status") '$msg'"
+    done
+    ds group01 group02 text "$other" >/dev/null
+    [ "$(cat "$tmp/status")" = 403 ] || fail "group01 posting to group02's DS got $(cat "$tmp/status")"
+    [ -z "$(lab_ds group01.lab.)" ] && [ -z "$(lab_ds group02.lab.)" ] \
+        && ok "rejected with a message, lab. unchanged: another group's name or form, malformed or short digest, NS, A, garbage" \
+        || fail "a rejected DS reached lab."
+    ds group01 group01 text "$ksk" >/dev/null
+    [ "$(cat "$tmp/status")" = 200 ] && lab_ds group01.lab. | grep "^$tag 13 2 " >/dev/null \
+        && ok "pasting dnssec-dsfromkey's line publishes it: dig @{{master4}} group01.lab. DS +norec shows $tag" \
+        || fail "publish: $(cat "$tmp/status") $(cat "$tmp/body")"
+    validated && docker exec group01-0 dig @{{master4}} www.group01.lab. A +dnssec | grep -E '^;; flags:.* ad[ ;]' >/dev/null \
+        && ok "with the DS published, delv-lab: group01.lab. SOA fully validated; dig gets ad" || fail "not validated after publishing"
+    [ "$(ds group01 group01 text "$ksk" | python3 -c 'import json, sys; print(json.load(sys.stdin)["message"])')" = "Ese DS ya estaba publicado." ] \
+        && ok "publishing the same DS again is a no-op" || fail "duplicate publish: $(cat "$tmp/body")"
+    spare="group01.lab. 3600 IN DS 4242 13 2 $(printf '%064d' 42)"
+    ds group01 group01 text "$spare" >/dev/null
+    [ "$(lab_ds group01.lab. | wc -l)" = 2 ] || fail "second DS not added"
+    ds group01 group01 record "4242 13 2 $(printf '%064d' 42)" /delete >/dev/null
+    [ "$(cat "$tmp/status")" = 200 ] && [ "$(lab_ds group01.lab. | awk '{print $1}')" = "$tag" ] \
+        && ok "a second DS (with TTL) is added; removing it leaves only the KSK's" || fail "remove one of two: $(cat "$tmp/body")"
+    api group01 GET /api/ds/group01 | python3 -c 'import json, sys
+    d = json.load(sys.stdin)
+    assert d["zone"] == "group01.lab." and [r["key_tag"] for r in d["records"]] == [int(sys.argv[1])], d' "$tag" \
+        && ok "the page lists the published DS" || fail "list: $(cat "$tmp/body")"
+    ds group01 group01 record "${ksk#* DS }" /delete >/dev/null
+    [ "$(cat "$tmp/status")" = 200 ] && [ -z "$(lab_ds group01.lab.)" ] && ! validated \
+        && ok "removing the DS takes it out of lab.; group01.lab. is no longer validated" || fail "remove: $(cat "$tmp/body")"
+    ds group01 group01 record "${ksk#* DS }" /delete >/dev/null
+    [ "$(cat "$tmp/status")" = 404 ] || fail "removing a missing DS got $(cat "$tmp/status")"
+    ds instructor group02 text "$other" >/dev/null && lab_ds group02.lab. | grep "^$tag " >/dev/null \
+        && ds instructor group02 record "${other#* DS }" /delete >/dev/null && [ -z "$(lab_ds group02.lab.)" ] \
+        && ok "instructor publishes and removes a DS for group02" || fail "instructor DS: $(cat "$tmp/body")"
 
     curl -s -o /dev/null -b "$tmp/group01" -c "$tmp/group01" -X POST "$url/logout"
     api group01 GET /api/nodes >/dev/null
@@ -441,6 +458,55 @@ _web root=state:
     @for _ in $(seq 30); do curl -fs -o /dev/null http://127.0.0.1:{{web_port}}/login 2>/dev/null && exit 0; sleep 1; done; \
         echo "{{web_name}}: not answering on 127.0.0.1:{{web_port}} after 30 s" >&2; exit 1
     @echo "started {{web_name}} (http://127.0.0.1:{{web_port}})"
+
+# As a group does in modules 3-4: groupGG-0 signs groupGG.lab. (KASP,
+# inline signing) and groupGG-1/-2 serve it as secondaries, so every
+# server the delegation points to answers. Prints the KSK's DS (SHA-256).
+[private]
+_group_zone g:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    zone=$(printf 'group%02d.lab' {{g}}); grp=$(printf 'group%02d' {{g}}); net="10.53.$((10#{{g}}))"
+    x() { docker exec "$@"; }
+    fail() { echo "FAIL $*" >&2; exit 1; }
+    x -i "$grp-0" bash -s >&2 <<EOF
+    set -e
+    cat >> /etc/bind/named.conf.local <<'C'
+    zone "$zone" { type primary; file "/var/lib/bind/db.$zone"; dnssec-policy default; inline-signing yes;
+        allow-transfer { $net.0/24; }; also-notify { $net.11; $net.12; }; };
+    C
+    cat > /var/lib/bind/db.$zone <<'Z'
+    \$TTL 60
+    @    SOA ns0.$zone. hostmaster.$zone. 1 300 60 86400 60
+    @    NS  ns0
+    @    NS  ns1
+    @    NS  ns2
+    ns0  A   $net.10
+    ns1  A   $net.11
+    ns2  A   $net.12
+    www  A   $net.10
+    Z
+    chown bind:bind /var/lib/bind/db.$zone
+    rndc reconfig
+    EOF
+    for _ in $(seq 30); do
+        ds=$(x "$grp-0" dig +norec @127.0.0.1 "$zone." DNSKEY | x -i "$grp-0" dnssec-dsfromkey -2 -f - "$zone." 2>/dev/null | head -1) || true
+        [ -n "$ds" ] && break; sleep 1
+    done
+    [ -n "$ds" ] || fail "$grp-0 didn't sign $zone."
+    for n in 1 2; do
+        printf 'zone "%s" { type secondary; primaries { %s.10; }; file "/var/cache/bind/db.%s"; };\n' "$zone" "$net" "$zone" \
+            | x -i "$grp-$n" tee -a /etc/bind/named.conf.local >/dev/null
+        x "$grp-$n" rndc reconfig
+    done
+    want=$(x "$grp-0" dig +short +norec @127.0.0.1 "$zone." SOA | awk '{print $3}')
+    for n in 1 2; do
+        for _ in $(seq 30); do
+            [ "$(x "$grp-$n" dig +short +norec @127.0.0.1 "$zone." SOA | awk '{print $3}')" = "$want" ] && break; sleep 1
+        done
+        x "$grp-$n" dig +norec @127.0.0.1 "$zone." DNSKEY | grep -q DNSKEY || fail "$grp-$n didn't transfer $zone."
+    done
+    echo "$ds"
 
 # Wait up to 30 s for a container's named to be up.
 [private]

@@ -100,3 +100,19 @@ button.link { border: none; background: none; color: var(--accent); padding: 0; 
   td { border: none; padding: 0.15rem 0.6rem; white-space: normal; }
   td.addr { word-break: break-all; }
 }
+
+#ds { margin-top: 2rem; }
+#ds h2 { font-size: 1.05rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+#ds select, #ds textarea {
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+}
+#ds-records td.digest { white-space: normal; word-break: break-all; }
+#ds-records td.digest code { font-size: 0.8rem; }
+#ds-form { display: flex; gap: 0.5rem; align-items: flex-start; margin-top: 0.75rem; }
+#ds-form textarea { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; resize: vertical; }
+.ok { color: var(--ok); }
