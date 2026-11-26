@@ -44,6 +44,12 @@ web_name := "dnslab-web"
 web_port := "8080"
 caddy_image := "caddy:2.8.4"
 caddy_name := "dnslab-caddy"
+# Host inotify limits (#28). They are per user, so every lab container's
+# systemd (all root on the host) shares them; Ubuntu's 128 instances run out
+# at about 19 containers and systemctl then fails with "Too many open files".
+inotify_instances := "8192"
+inotify_watches := "524288"
+sysctl_conf := "/etc/sysctl.d/90-dns-lab.conf"
 # What of state/ makes up an environment (backed up, restored, torn down); not backups/.
 state_items := "env credentials nodes master shared web caddy"
 # systemd as PID 1 without --privileged: images/node/dnslab-init.sh
@@ -68,6 +74,7 @@ init: _check
         echo "See 'just status'; remove it with 'just destroy' first." >&2
         exit 1
     fi
+    just _inotify
     trap 'echo "init failed; the environment is incomplete. See just status." >&2' ERR
     for image in {{node_image}}:images/node {{master_image}}:images/master {{web_image}}:web; do
         docker image inspect "${image%%:*}" >/dev/null 2>&1 || docker build -q -t "${image%%:*}" "${image#*:}" >/dev/null
@@ -570,6 +577,10 @@ test-init: build
     done
     x dig +norec @{{master4}} group03.lab. NS | grep 'status: NXDOMAIN' >/dev/null || fail "group03.lab. exists"
     ok "lab. delegates group01.lab. and group02.lab. (3 NS each); group03.lab. is NXDOMAIN"
+    (( $(sysctl -n fs.inotify.max_user_instances) >= {{inotify_instances}} && $(sysctl -n fs.inotify.max_user_watches) >= {{inotify_watches}} )) \
+        && ok "host inotify limits at least {{inotify_instances}} instances, {{inotify_watches}} watches" || fail "inotify limits: $(sysctl fs.inotify)"
+    for c in {{master_name}} group01-0 group02-2; do docker exec $c systemctl restart named || fail "systemctl restart named in $c"; done
+    ok "systemctl restart named works in the master and nodes"
     x dig @{{master4}} lab. SOA | grep -E '^;; flags:.* ad[ ;]' >/dev/null && ok "the resolver validates lab." || fail "lab. not validated"
 
     [ "$(stat -c %a "{{state}}/credentials")" = 600 ] \
@@ -756,6 +767,20 @@ _rmi:
     for i in {{master_image}} {{web_image}} {{node_image}} {{caddy_image}}; do
         if docker image inspect "$i" >/dev/null 2>&1; then docker rmi "$i" >/dev/null; echo "removed image $i"; fi
     done
+
+# Raise the host's inotify limits to inotify_instances/inotify_watches if
+# lower, persistently in sysctl_conf; never lowers them. Silent if enough.
+[private]
+_inotify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    i=$(sysctl -n fs.inotify.max_user_instances); w=$(sysctl -n fs.inotify.max_user_watches)
+    (( i >= {{inotify_instances}} && w >= {{inotify_watches}} )) && exit 0
+    i=$(( i > {{inotify_instances}} ? i : {{inotify_instances}} )); w=$(( w > {{inotify_watches}} ? w : {{inotify_watches}} ))
+    printf '# Written by dns-lab just init (#28): each lab container runs systemd as root,\n# and they share these per-user limits.\nfs.inotify.max_user_instances = %s\nfs.inotify.max_user_watches = %s\n' "$i" "$w" \
+        | sudo tee "{{sysctl_conf}}" >/dev/null
+    sudo sysctl -q -p "{{sysctl_conf}}"
+    echo "raised the host's inotify limits for the containers' systemd: max_user_instances $i, max_user_watches $w (in {{sysctl_conf}})"
 
 # Create the internal dns-lab network, the master's uplink and the web front network, if missing.
 [private]
