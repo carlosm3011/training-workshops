@@ -4,7 +4,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls, terminals and DS form (`just build` and the `just test-*` recipes). The lifecycle recipes `init`, `backup` and `destroy` still only print what they will do.
+> **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls, terminals and DS form, served over HTTPS by Caddy with a self-signed certificate (`just build` and the `just test-*` recipes). The lifecycle recipes `init`, `backup` and `destroy` still only print what they will do.
 
 ## Usage
 
@@ -15,6 +15,7 @@ just                # list the recipes
 just status         # show the parameters and the environment's containers
 just init           # create a new environment
 just credentials    # print the web page's passwords
+just cert           # print the web page's certificate: path, expiry, SHA-256 fingerprint
 just backup         # save every node's config, zones and keys
 just destroy        # back up, then remove the environment completely
 just build          # build the lab images
@@ -22,6 +23,7 @@ just test-node      # boot a throwaway node and check it
 just test-net       # bring up master + 2 groups, check addressing and routing, tear down
 just test-master    # bring up master + group01, check lab., the resolver and DS publishing, tear down
 just test-web       # bring up master + 2 groups + web page, check login, controls, DS form, terminals and authorization, tear down
+just test-https     # bring up master + group01-0 + web page + Caddy, check HTTPS, tear down
 ```
 
 The `test-*` recipes (except `test-node`) use the real names (`dns-lab`, `dnslab-master`, `group01-0` …), so it refuses to run while an environment exists.
@@ -52,6 +54,7 @@ GOAL.md         requirements and design decisions
 images/node/    node image: Ubuntu 24.04, systemd, bind9 (see its README)
 images/master/  master image: NAT gateway, lab. zone, resolver (see its README)
 web/            web page: login, node list, controls, terminals, DS form (see its README)
+caddy/          Caddyfile: HTTPS for the web page on ports 80 and 443
 templates/      config templates rendered by `just init`
 state/          generated per environment, gitignored:
   nodes/<container>/  each node's bind mount (/etc/bind, /var/cache/bind, /var/lib/bind)
@@ -59,6 +62,7 @@ state/          generated per environment, gitignored:
   shared/             mounted at /etc/dnslab: lab.'s trust anchor (master rw, nodes ro)
   credentials         web page logins: instructor and one per group (mode 600)
   web/session-secret  signs the web page's session cookies
+  caddy/              the web page's self-signed certificate and key, until #11
   backups/            tarballs from `just backup`
 ```
 
@@ -95,7 +99,7 @@ Directories marked with an issue number are created by that issue.
 
 ## Web page
 
-`dnslab-web` listens on `127.0.0.1:8080` on the lab host; until Caddy is in front of it (#11), use an SSH tunnel (`ssh -N -L 8080:127.0.0.1:8080 <host>`). Groups log in with the passwords from `just credentials` and see only their own nodes; the instructor sees everything. Clicking a node's name opens a root shell on it in a new tab. Below the nodes, **DS en lab.** lists, publishes and removes the DS records of the group's zone. See [web/README.md](web/README.md).
+The page is at `https://<host>/` (`https://kobe.labs.lacnic.net/` by default): Caddy (`dnslab-caddy`) listens on ports 443 and 80, redirects HTTP to HTTPS and proxies to `dnslab-web` over a small bridge network, `dns-lab-front`, which the lab can't reach. Until Let's Encrypt (#11), the certificate is self-signed, generated per environment for `host` and valid for a year, so students accept the browser's warning once. `just cert` prints its SHA-256 fingerprint, so you can tell students what the warning should show. `dnslab-web` itself only listens on `127.0.0.1:8080`, for the tests and SSH tunnels. Groups log in with the passwords from `just credentials` and see only their own nodes; the instructor sees everything. Clicking a node's name opens a root shell on it in a new tab. Below the nodes, **DS en lab.** lists, publishes and removes the DS records of the group's zone. See [web/README.md](web/README.md).
 
 ## DNS names in the lab
 

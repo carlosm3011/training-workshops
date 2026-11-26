@@ -4,7 +4,7 @@ The lab's web page, `dnslab-web`: students log in, see their nodes, open termina
 
 ## What it does
 
-- **Login** with the passwords in `state/credentials`. Each group (`group01`, `group02` …) sees only its own three nodes; `instructor` sees every node and the master. Sessions are signed cookies (SameSite=strict) that last 12 hours; **Salir** ends them.
+- **Login** with the passwords in `state/credentials`. Each group (`group01`, `group02` …) sees only its own three nodes; `instructor` sees every node and the master. Sessions are signed cookies (SameSite=strict) that last 12 hours; **Salir** ends them. Over HTTPS the cookie is also marked Secure (a small middleware adds the flag when Caddy's `X-Forwarded-Proto` says `https`), so the browser never sends it in the clear. The loopback port stays plain HTTP, for the tests and SSH tunnels.
 - **Node list:** name, state, IPv4 and IPv6 on `dns-lab`, and time since start. The page polls every 2 s, so changes show without reloading. A stopped container has no addresses, so those columns are empty while it's down.
 - **Iniciar / Detener / Reiniciar** run `docker start`, `stop` and `restart` on the container. A config change inside a node still needs `rndc reload` or `systemctl restart bind9`; the buttons are for whole-container restarts and for recovering a broken node.
 
@@ -43,7 +43,7 @@ A group may act only on containers with `dnslab.role=node` and its own `dnslab.g
 
 ```sh
 docker run -d --name dnslab-web --restart unless-stopped \
-  -p 127.0.0.1:8080:8000 \
+  --network dns-lab-front -p 127.0.0.1:8080:8000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v …/state/credentials:/run/dnslab/credentials:ro \
   -v …/state/web/session-secret:/run/dnslab/session-secret:ro \
@@ -53,13 +53,13 @@ docker run -d --name dnslab-web --restart unless-stopped \
   --label dnslab.role=web dnslab-web
 ```
 
-It listens on the host's loopback only. Until Caddy is in front of it (#11), reach it through an SSH tunnel:
+Students reach it through Caddy at `https://<host>/` (see `../caddy/Caddyfile` and the main README). The app itself listens on the host's loopback and on `dns-lab-front`, where Caddy proxies to `dnslab-web:8000`. For a quick look without Caddy, use an SSH tunnel:
 
 ```sh
 ssh -N -L 8080:127.0.0.1:8080 kobe.labs.lacnic.net    # then open http://127.0.0.1:8080
 ```
 
-**The Docker socket is root on the host.** Whoever controls this app controls Docker, so the app is deliberately small: it only lists, starts, stops and restarts labelled lab containers, opens shells in them and changes DS records in `lab.`, behind the login. Keep it off the Internet without TLS (#11).
+**The Docker socket is root on the host.** Whoever controls this app controls Docker, so the app is deliberately small: it only lists, starts, stops and restarts labelled lab containers, opens shells in them and changes DS records in `lab.`, behind the login. Never publish it without Caddy's TLS in front.
 
 ## Credentials
 

@@ -63,6 +63,33 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 # start or stop containers.
 app.add_middleware(SessionMiddleware, secret_key=SECRET, same_site="strict",
                    https_only=False, max_age=12 * 3600)
+
+
+class SecureCookieOverHTTPS:
+    """Mark the session cookie Secure on requests that came in over HTTPS
+    (through Caddy, which sets X-Forwarded-Proto), so the browser never
+    sends it over plain HTTP. The loopback port the tests and the SSH
+    tunnel use stays plain HTTP and gets the cookie without the flag."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("scheme") != "https":
+            return await self.app(scope, receive, send)
+
+        async def send_secure(message):
+            if message["type"] == "http.response.start":
+                message["headers"] = [
+                    (k, v + b"; secure" if k == b"set-cookie" and v.startswith(b"session=") else v)
+                    for k, v in message["headers"]]
+            await send(message)
+
+        await self.app(scope, receive, send_secure)
+
+
+# Added last, so it wraps SessionMiddleware and sees its Set-Cookie.
+app.add_middleware(SecureCookieOverHTTPS)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 
