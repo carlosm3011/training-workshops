@@ -68,5 +68,6 @@ Chosen while planning and written into the issues; change them here first if nee
 ## How we work
 
 - Plans and progress are tracked on GitHub with `gh`, in milestone **M0-Initial-Lab** (issues #1–#12).
+- Ideas for later go to milestone **Backlog** as issues, unscheduled until a later milestone picks them up.
 - Every issue has acceptance criteria.
 - Issues are closed only with Carlos's OK.
