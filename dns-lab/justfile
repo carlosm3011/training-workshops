@@ -35,11 +35,13 @@ master_image := "dnslab-master"
 master_name := "dnslab-master"
 web_image := "dnslab-web"
 web_name := "dnslab-web"
-# The web app listens on the host's loopback only; Caddy (#11) will be the
-# public entry point. Until then, reach it with an SSH tunnel.
+# The web app listens on the host's loopback only, for the tests and SSH
+# tunnels; Caddy is the public entry point.
 web_port := "8080"
 caddy_image := "caddy:2.8.4"
 caddy_name := "dnslab-caddy"
+# What of state/ makes up an environment (backed up, restored, torn down); not backups/.
+state_items := "env credentials nodes master shared web caddy"
 # systemd as PID 1 without --privileged: images/node/dnslab-init.sh
 # remounts the container's own cgroup subtree read-write, which needs
 # SYS_ADMIN and no AppArmor profile. NET_ADMIN lets dnslab-net set the
@@ -93,11 +95,51 @@ destroy: _check
     @echo "  - remove the master, every groupNN-N node, the web page and Caddy"
     @echo "  - remove the {{network}} network and {{state}}, except {{state}}/backups"
 
-# Save every node's config, zones and keys to a tarball.
+# Save every node's config, zones and keys, the master's state and the credentials to state/backups.
 backup: _check
-    @echo "backup (not implemented yet, see #6) would, on {{host}}:"
-    @echo "  - archive each node's bind mount under {{state}}/nodes, the master's state"
-    @echo "    and the credentials into {{state}}/backups/dns-lab-{{host}}-<timestamp>.tar.gz"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -r "{{state}}/env" ] || { echo "No environment to back up: {{state}}/env is created by 'just init'." >&2; exit 1; }
+    . "{{state}}/env"
+    mkdir -p "{{state}}/backups"
+    file="{{state}}/backups/dns-lab-$DNSLAB_HOST-$(date +%Y%m%d-%H%M%S).tar.gz"
+    items=$(cd "{{state}}" && ls -d {{state_items}} 2>/dev/null || true)
+    # Zones and keys belong to the containers' bind user, hence sudo; numeric
+    # owners, so a restore gives them back to that uid whatever the host calls
+    # it. GNU tar exits 1 if a running named wrote a file while it was read.
+    rc=0; (umask 077; sudo tar -czf - --numeric-owner --warning=no-file-changed -C "{{state}}" $items > "$file") || rc=$?
+    (( rc <= 1 )) || { rm -f "$file"; echo "backup failed (tar exit $rc)" >&2; exit 1; }
+    chmod 600 "$file"
+    echo "saved $file ($(du -h "$file" | cut -f1); $(ls "{{state}}/nodes" | wc -l) nodes, master, credentials)"
+
+# Put a backup back into a matching environment: back up, stop the lab, replace state/, start it.
+restore file: _check
+    #!/usr/bin/env bash
+    set -euo pipefail
+    file=$(cd "{{invocation_directory()}}" && realpath "{{file}}")
+    [ -r "$file" ] || { echo "Can't read $file" >&2; exit 1; }
+    from=$(tar -xzOf "$file" env 2>/dev/null) || { echo "$file isn't a dns-lab backup (no env in it)" >&2; exit 1; }
+    want=$(echo "$from" | sed -n 's/^DNSLAB_GROUPS=//p'); want_host=$(echo "$from" | sed -n 's/^DNSLAB_HOST=//p')
+    have=$(cat "{{state}}/env" 2>/dev/null || true)
+    if [ "$have" != "$from" ]; then
+        echo "This backup is from an environment with $want groups on $want_host; there is ${have:+a different one}${have:-none} here." >&2
+        echo "Create a matching one first: just groups=$want host=$want_host init (after 'just destroy' if needed)." >&2
+        exit 1
+    fi
+    just backup
+    trap 'echo "restore failed; the state before it is in the backup above. See just status." >&2' ERR
+    docker stop $(docker ps -q --filter label=dnslab.role) >/dev/null
+    echo "stopped the lab"
+    for f in {{state_items}}; do sudo rm -rf "{{state}}/$f"; done
+    sudo tar -xzf "$file" --numeric-owner -C "{{state}}"
+    echo "restored {{state}} from $file"
+    docker start {{master_name}} >/dev/null; just _wait_resolver
+    nodes=$(just groups=$want _nodes)
+    docker start $nodes >/dev/null
+    for c in $nodes; do just _wait "$c"; done
+    docker start {{web_name}} {{caddy_name}} >/dev/null
+    for _ in $(seq 30); do curl -sk -o /dev/null --resolve $want_host:443:127.0.0.1 https://$want_host/login 2>/dev/null && break; sleep 1; done
+    echo "started the master, $(echo $nodes | wc -w) nodes, the web page and Caddy"
 
 # Show the environment's parameters and every lab container's state and addresses.
 status: _check
@@ -530,6 +572,70 @@ test-init: build
         && ok "a second init (even with groups=3) refuses with a message and changes nothing" || fail "second init: $msg"
     echo "all init checks passed"
 
+# Run init with 2 groups, sign group01.lab., back up, tear down, init and restore; check it validates again.
+test-backup: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    found=$(just _existing)
+    if [ -n "$found" ]; then
+        echo "test-backup needs a host without an environment; found:" >&2; echo "$found" >&2; exit 1
+    fi
+    mkdir -p "{{state}}/backups"
+    old=$(ls "{{state}}/backups")
+    cleanup() {
+        just _teardown
+        for f in $(ls "{{state}}/backups"); do echo "$old" | grep -qxF "$f" || rm -f "{{state}}/backups/$f"; done
+    }
+    trap cleanup EXIT
+    ok() { echo "ok   $*"; }
+    fail() { echo "FAIL $*" >&2; exit 1; }
+    x() { docker exec "$@"; }
+    validates() { x group02-0 dig @{{master4}} www.group01.lab. A +dnssec | grep -E '^;; flags:.* ad[ ;]' >/dev/null; }
+    dsof() { x group01-0 dig +norec @127.0.0.1 group01.lab. DNSKEY | x -i group01-0 dnssec-dsfromkey -2 -f - group01.lab. | head -1; }
+    just groups=2 init >/dev/null
+    ds=$(just _group_zone 1)
+    printf 'update add %s\nsend\n' "$(echo "$ds" | sed 's/ IN / 60 IN /')" | x -i {{master_name}} nsupdate -k /etc/bind/dnslab-webapp.key
+    validates && ok "group01.lab. signed on group01-0, DS published, www.group01.lab. validates" || fail "setup: group01.lab. doesn't validate"
+    creds=$(sha256sum < "{{state}}/credentials")
+    docker stop group02-1 >/dev/null
+
+    out=$(just backup)
+    file=$(echo "$out" | sed -n 's/^saved \(.*\) (.*/\1/p')
+    [[ "$file" =~ ^{{state}}/backups/dns-lab-{{host}}-[0-9]{8}-[0-9]{6}\.tar\.gz$ ]] && [ "$(stat -c %a "$file")" = 600 ] \
+        && echo "$out" | grep -E '\([0-9.]+[KM]; 6 nodes, master, credentials\)$' >/dev/null \
+        && ok "just backup, with group02-1 stopped: $(basename "$file"), mode 600, size printed" || fail "backup: $out"
+    list=$(tar -tzf "$file")
+    for c in $(just groups=2 _nodes); do for d in etc-bind var-cache-bind var-lib-bind; do
+        echo "$list" | grep -xF "nodes/$c/$d/" >/dev/null || fail "no nodes/$c/$d/ in the backup"
+    done; done
+    for f in credentials env master/etc-bind/named.conf.lab shared/lab-anchor.conf; do echo "$list" | grep -xF "$f" >/dev/null || fail "no $f in the backup"; done
+    ok "the backup has etc-bind, var-cache-bind and var-lib-bind for all 6 nodes, master/, shared/ and credentials"
+    tag=$(printf '%05d' "$(echo "$ds" | awk '{ print $4 }')")
+    [ "$(echo "$list" | grep -cE "^nodes/group01-0/[^/]+/Kgroup01\.lab\.\+013\+$tag\.(key|private|state)$")" = 3 ] \
+        && ok "group01-0's KSK (Kgroup01.lab.+013+$tag .key, .private, .state) is in it" || fail "KSK files missing: $(echo "$list" | grep Kgroup01)"
+
+    just _teardown
+    just groups=2 init >/dev/null
+    validates && fail "a fresh environment validates group01.lab. before the restore"
+    tmp=$(mktemp -d); printf 'DNSLAB_GROUPS=3\nDNSLAB_HOST={{host}}\n' > "$tmp/env"; tar -czf "$tmp/other.tar.gz" -C "$tmp" env
+    started=$(docker ps --filter label=dnslab.role --format '{{{{.Names}} {{{{.State}}' | sort)
+    if msg=$(just restore "$tmp/other.tar.gz" 2>&1); then fail "restored a backup of a 3-group environment"; fi
+    rm -rf "$tmp"
+    echo "$msg" | grep 'with 3 groups' >/dev/null && [ "$(docker ps --filter label=dnslab.role --format '{{{{.Names}} {{{{.State}}' | sort)" = "$started" ] \
+        && ok "restoring a 3-group backup into this 2-group environment refuses and stops nothing" || fail "mismatched restore: $msg"
+    out=$(just restore "$file")
+    echo "$out" | sed 's/^/     /'
+    [ "$(sha256sum < "{{state}}/credentials")" = "$creds" ] && ok "after teardown, init and restore: the credentials are the backup's" || fail "credentials not restored"
+    [ "$(dsof)" = "$ds" ] && ok "group01-0 serves group01.lab. signed with the same KSK" || fail "group01-0 DS now: $(dsof)"
+    for n in 1 2; do
+        x group01-$n dig +norec @127.0.0.1 group01.lab. SOA | grep -E '^;; flags:.* aa[ ;]' >/dev/null || fail "group01-$n doesn't serve group01.lab."
+    done
+    ok "group01-1 and -2 serve it as secondaries again"
+    validates && ok "lab. still has the DS and the resolver validates www.group01.lab." || fail "group01.lab. doesn't validate after the restore"
+    [ "$(docker ps --filter label=dnslab.role -q | wc -l)" = 9 ] && ok "every container is running, group02-1 included" || fail "not all running: $(just status)"
+    [ "$(ls "{{state}}/backups" | grep -cvxF "$old")" = 3 ] && ok "restore first backed up the state it replaced" || fail "backups: $(ls "{{state}}/backups")"
+    echo "all backup checks passed"
+
 # Print what of an environment exists on this host (containers, networks,
 # state files), one per line; nothing if none. State backups don't count.
 [private]
@@ -540,7 +646,7 @@ _existing:
     for n in {{network}} {{uplink}} {{front}}; do
         if docker network inspect "$n" >/dev/null 2>&1; then echo "network $n"; fi
     done
-    for f in env master nodes shared credentials web caddy; do
+    for f in {{state_items}}; do
         if [ -e "{{state}}/$f" ]; then echo "state {{state}}/$f"; fi
     done
 
@@ -553,7 +659,7 @@ _teardown:
     ids=$(docker ps -aq --filter label=dnslab.role)
     [ -z "$ids" ] || docker rm -f $ids >/dev/null
     docker network rm {{network}} {{uplink}} {{front}} >/dev/null 2>&1 || true
-    for f in env master nodes shared credentials web caddy; do sudo rm -rf "{{state}}/$f"; done
+    for f in {{state_items}}; do sudo rm -rf "{{state}}/$f"; done
 
 # Create the internal dns-lab network, the master's uplink and the web front network, if missing.
 [private]
