@@ -19,6 +19,8 @@ state := justfile_directory() / "state"
 
 # The master's second network, a normal Docker bridge to the Internet.
 uplink := "dns-lab-uplink"
+# Caddy and the web app talk over this bridge; the lab can't reach it.
+front := "dns-lab-front"
 
 # Addressing (GOAL.md, README.md): master .0.1 / ::1, node groupGG-N at
 # 10.53.GG.(10+N) / fd53::GG:(10+N). The host's end of the bridge sits
@@ -36,6 +38,8 @@ web_name := "dnslab-web"
 # The web app listens on the host's loopback only; Caddy (#11) will be the
 # public entry point. Until then, reach it with an SSH tunnel.
 web_port := "8080"
+caddy_image := "caddy:2.8.4"
+caddy_name := "dnslab-caddy"
 # systemd as PID 1 without --privileged: images/node/dnslab-init.sh
 # remounts the container's own cgroup subtree read-write, which needs
 # SYS_ADMIN and no AppArmor profile. NET_ADMIN lets dnslab-net set the
@@ -78,6 +82,12 @@ status: _check
     @echo "nodes:   $(just groups={{groups}} _nodes | tr '\n' ' ')"
     @echo "(container states: not implemented yet, see #5)"
 
+# Print the web page's certificate: its path, names, expiry and fingerprint.
+cert:
+    @[ -r "{{state}}/caddy/cert.pem" ] || { echo "No certificate yet: {{state}}/caddy/cert.pem is created by 'just init'." >&2; exit 1; }
+    @echo "{{state}}/caddy/cert.pem"
+    @openssl x509 -in "{{state}}/caddy/cert.pem" -noout -ext subjectAltName -enddate -fingerprint -sha256 | sed '/^X509v3/d; s/^ *//'
+
 # Print the web page's group and instructor passwords.
 credentials:
     @[ -r "{{state}}/credentials" ] && cat "{{state}}/credentials" \
@@ -100,7 +110,7 @@ test-net: build
     fi
     cleanup() {
         docker rm -f {{master_name}} "${nodes[@]}" >/dev/null 2>&1 || true
-        docker network rm {{network}} {{uplink}} >/dev/null 2>&1 || true
+        docker network rm {{network}} {{uplink}} {{front}} >/dev/null 2>&1 || true
         sudo rm -rf "$root"
     }
     trap cleanup EXIT
@@ -147,7 +157,7 @@ test-master: build
     fi
     cleanup() {
         docker rm -f {{master_name}} "${nodes[@]}" >/dev/null 2>&1 || true
-        docker network rm {{network}} {{uplink}} >/dev/null 2>&1 || true
+        docker network rm {{network}} {{uplink}} {{front}} >/dev/null 2>&1 || true
         sudo rm -rf "$root"
     }
     trap cleanup EXIT
@@ -239,7 +249,7 @@ test-web: build
     tmp=$(mktemp -d)
     cleanup() {
         docker rm -f {{web_name}} {{master_name}} "${nodes[@]}" >/dev/null 2>&1 || true
-        docker network rm {{network}} {{uplink}} >/dev/null 2>&1 || true
+        docker network rm {{network}} {{uplink}} {{front}} >/dev/null 2>&1 || true
         sudo rm -rf "$root" "$tmp"
     }
     trap cleanup EXIT
@@ -367,12 +377,80 @@ test-web: build
         {{web_name}} python - < web/tests/terminal_check.py | grep -v '^all terminal'
     echo "all web checks passed"
 
-# Create the internal dns-lab network and the master's uplink, if missing.
+# Bring up master, group01-0, the web page and Caddy; check HTTPS with the self-signed certificate; tear down.
+test-https: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="{{state}}/test"
+    if docker network inspect {{network}} >/dev/null 2>&1 || docker container inspect {{web_name}} {{caddy_name}} >/dev/null 2>&1; then
+        echo "A {{network}} environment, {{web_name}} or {{caddy_name}} already exists on this host; test-https needs them absent." >&2; exit 1
+    fi
+    tmp=$(mktemp -d)
+    cleanup() {
+        docker rm -f {{caddy_name}} {{web_name}} {{master_name}} group01-0 >/dev/null 2>&1 || true
+        docker network rm {{network}} {{uplink}} {{front}} >/dev/null 2>&1 || true
+        sudo rm -rf "$root" "$tmp"
+    }
+    trap cleanup EXIT
+    cleanup; mkdir -p "$tmp"
+    docker pull -q {{caddy_image}} >/dev/null
+    just _network
+    just groups=1 _master "$root"
+    just _node "$root" 1 0; just _wait group01-0
+    just groups=1 _credentials "$root"
+    just _web "$root"
+    just _cert "$root"
+    just _caddy "$root"
+    ok() { echo "ok   $*"; }
+    fail() { echo "FAIL $*" >&2; exit 1; }
+    pass() { awk -v u="$1" '$1 == u { print $2 }' "$root/credentials"; }
+    cert="$root/caddy/cert.pem"
+    # Every request goes to this host's Caddy, by name, verifying the certificate.
+    c() { curl -s --resolve {{host}}:443:127.0.0.1 --resolve {{host}}:80:127.0.0.1 --cacert "$cert" "$@"; }
+    served_fp() { openssl s_client -connect 127.0.0.1:443 -servername {{host}} </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256; }
+    file_fp=$(openssl x509 -in "$cert" -noout -fingerprint -sha256)
+
+    [ "$(c -o "$tmp/page" -w '%{http_code}' https://{{host}}/login)" = 200 ] && grep 'Ingresar' "$tmp/page" >/dev/null \
+        && ok "https://{{host}}/login serves the login page; the certificate verifies against $cert" || fail "HTTPS login page"
+    [ "$(served_fp)" = "$file_fp" ] && ok "Caddy serves the self-signed certificate (${file_fp#*=})" || fail "served certificate differs"
+    read -r code loc < <(c -o /dev/null -w '%{http_code} %{redirect_url}' http://{{host}}/login)
+    [[ "$code" =~ ^30[178]$ ]] && [ "$loc" = "https://{{host}}/login" ] \
+        && ok "http:// redirects to https:// ($code)" || fail "no redirect: $code $loc"
+
+    c -D "$tmp/headers" -o /dev/null -c "$tmp/jar" --data-urlencode username=group01 --data-urlencode "password=$(pass group01)" https://{{host}}/login
+    grep -i '^set-cookie: session=' "$tmp/headers" | grep -i '; secure' >/dev/null \
+        && ok "session cookie set over HTTPS has the Secure flag" || fail "cookie not Secure: $(grep -i set-cookie "$tmp/headers")"
+    curl -s -D - -o /dev/null --data-urlencode username=group01 --data-urlencode "password=$(pass group01)" http://127.0.0.1:{{web_port}}/login \
+        | grep -i '^set-cookie: session=' | grep -iv '; secure' >/dev/null \
+        && ok "on the loopback port (tests, SSH tunnel) the cookie has no Secure flag" || fail "loopback cookie"
+    c -b "$tmp/jar" https://{{host}}/api/nodes | grep '"group01-0"' >/dev/null \
+        && [ "$(c -b "$tmp/jar" -o /dev/null -w '%{http_code}' -X POST https://{{host}}/api/nodes/group01-0/restart)" = 200 ] \
+        && just _wait group01-0 \
+        && [ "$(c -b "$tmp/jar" -o /dev/null -w '%{http_code}' https://{{host}}/api/ds/group01)" = 200 ] \
+        && ok "over HTTPS: node list, Restart and the DS form's API work" || fail "API over HTTPS"
+    caddy_ip=$(docker inspect -f '{{{{(index .NetworkSettings.Networks "{{front}}").IPAddress}}' {{caddy_name}})
+    docker run --rm -i --network {{front}} --add-host {{host}}:"$caddy_ip" -v "$cert:/ca.pem:ro" \
+        -e DNSLAB_HOST={{host}} -e PW_GROUP01="$(pass group01)" {{web_image}} python - < web/tests/https_check.py
+
+    docker restart {{caddy_name}} >/dev/null
+    for _ in $(seq 30); do c -o /dev/null https://{{host}}/login && break; sleep 1; done
+    [ "$(served_fp)" = "$file_fp" ] && ok "after restarting Caddy, the same certificate" || fail "certificate changed after restart"
+    just _cert "$root" | grep generated && fail "_cert regenerated an existing certificate" || true
+    ok "_cert keeps an existing certificate for {{host}}"
+
+    hostip=$(ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1) }')
+    probe() { docker run --rm --network {{uplink}} --entrypoint curl {{node_image}} -sk -m 3 -o /dev/null -w '%{http_code}' "$@" || true; }
+    [ "$(probe https://"$hostip"/login)" != 000 ] && [ "$(probe http://"$hostip":{{web_port}}/login)" = 000 ] \
+        && ok "from outside the host ($hostip): 443 answers, {{web_port}} doesn't" || fail "port {{web_port}} reachable on $hostip"
+    echo "all https checks passed"
+
+# Create the internal dns-lab network, the master's uplink and the web front network, if missing.
 [private]
 _network:
     @docker network inspect {{network}} >/dev/null 2>&1 || docker network create --internal \
         --subnet {{lab4}} --gateway 10.53.255.254 --ipv6 --subnet {{lab6}} --gateway fd53::ffff {{network}}
     @docker network inspect {{uplink}} >/dev/null 2>&1 || docker network create {{uplink}}
+    @docker network inspect {{front}} >/dev/null 2>&1 || docker network create {{front}}
 
 # Create and start the master: 10.53.0.1 on dns-lab plus the uplink, NAT,
 # lab. delegating to `groups` groups, and the lab's resolver.
@@ -442,11 +520,12 @@ _credentials root=state:
     fi
     [ -e "{{root}}/web/session-secret" ] || head -c 32 /dev/urandom | base64 > "{{root}}/web/session-secret"
 
-# Start the web page on 127.0.0.1:web_port, with the Docker socket mounted.
+# Start the web page on 127.0.0.1:web_port and the dns-lab-front network,
+# with the Docker socket mounted.
 [private]
 _web root=state:
     @docker run -d --name {{web_name}} --restart unless-stopped \
-        -p 127.0.0.1:{{web_port}}:8000 \
+        --network {{front}} -p 127.0.0.1:{{web_port}}:8000 \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "{{root}}/credentials:/run/dnslab/credentials:ro" \
         -v "{{root}}/web/session-secret:/run/dnslab/session-secret:ro" \
@@ -507,6 +586,38 @@ _group_zone g:
         x "$grp-$n" dig +norec @127.0.0.1 "$zone." DNSKEY | grep -q DNSKEY || fail "$grp-$n didn't transfer $zone."
     done
     echo "$ds"
+
+# Generate the web page's self-signed certificate for `host` (#20), unless
+# one for that name exists: one year, so students accept the browser's
+# warning once per environment. Let's Encrypt replaces it in #11.
+[private]
+_cert root=state:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{root}}/caddy"
+    mkdir -p "$dir"
+    if openssl x509 -in "$dir/cert.pem" -noout -ext subjectAltName 2>/dev/null | grep -w "DNS:{{host}}" >/dev/null; then
+        exit 0
+    fi
+    (umask 077; openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 \
+        -subj "/CN={{host}}" -addext "subjectAltName=DNS:{{host}}" \
+        -keyout "$dir/key.pem" -out "$dir/cert.pem" 2>/dev/null)
+    chmod 644 "$dir/cert.pem"
+    echo "generated $dir/cert.pem for {{host}}"
+
+# Start Caddy on ports 80 and 443 in front of the web page (after _web).
+[private]
+_caddy root=state:
+    @docker run -d --name {{caddy_name}} --restart unless-stopped \
+        --network {{front}} -p 80:80 -p 443:443 \
+        -v "{{justfile_directory()}}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+        -v "{{root}}/caddy:/certs:ro" \
+        -e DNSLAB_HOST={{host}} \
+        --label dnslab.role=caddy \
+        {{caddy_image}} >/dev/null
+    @for _ in $(seq 30); do curl -sk -o /dev/null --resolve {{host}}:443:127.0.0.1 https://{{host}}/login 2>/dev/null && exit 0; sleep 1; done; \
+        echo "{{caddy_name}}: not answering on https://{{host}} after 30 s" >&2; exit 1
+    @echo "started {{caddy_name}} (https://{{host}})"
 
 # Wait up to 30 s for a container's named to be up.
 [private]

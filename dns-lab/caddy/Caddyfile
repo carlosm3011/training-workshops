@@ -1,0 +1,13 @@
+# The lab's public entry point: HTTPS for DNSLAB_HOST, proxied to the web
+# app over the dns-lab-front network. HTTP on port 80 redirects to HTTPS.
+#
+# Until #11 (Let's Encrypt), the certificate is the self-signed one `just`
+# generates in state/caddy/ (#20). To switch, drop the tls line.
+{
+	admin off
+}
+
+{$DNSLAB_HOST} {
+	tls /certs/cert.pem /certs/key.pem
+	reverse_proxy dnslab-web:8000
+}
