@@ -47,6 +47,13 @@ The `test-*` recipes (except `test-node`) use the real names (`dns-lab`, `dnslab
 
 The host also needs [just](https://just.systems) 1.15 or later; Ubuntu 24.04's package (`sudo apt install just`) is enough.
 
+Every lab container runs systemd as root, and they all share the host's per-user inotify limits. Ubuntu's default of 128 instances runs out at about 19 containers, and `systemctl` inside a node then fails with `Failed to allocate directory watch: Too many open files`. So `just init` first makes sure `fs.inotify.max_user_instances` is at least 8192 and `fs.inotify.max_user_watches` at least 524288. If either is lower, it writes `/etc/sysctl.d/90-dns-lab.conf`, applies it with `sudo` and says so; it never lowers a higher value. On a host where a lab is already running, the same can be done by hand, without restarting anything:
+
+```sh
+printf 'fs.inotify.max_user_instances = 8192\nfs.inotify.max_user_watches = 524288\n' | sudo tee /etc/sysctl.d/90-dns-lab.conf
+sudo sysctl -p /etc/sysctl.d/90-dns-lab.conf
+```
+
 ### Parameters
 
 | Parameter | Default | Meaning |
