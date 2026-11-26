@@ -81,6 +81,12 @@ dsForm.addEventListener("submit", async (ev) => {
   const text = dsForm.elements.text;
   if (await dsCall("add", { text: text.value }, dsForm.querySelector("button"))) text.value = "";
 });
-if (dsGroupSel) dsGroupSel.addEventListener("change", () => { dsShow(""); dsLoad(); });
+if (dsGroupSel) {
+  dsGroupSel.addEventListener("change", () => {
+    dsForm.elements.text.placeholder = `${dsGroup()}.lab. IN DS 12345 13 2 3F8A…`;
+    dsShow("");
+    dsLoad();
+  });
+}
 
 dsLoad();
