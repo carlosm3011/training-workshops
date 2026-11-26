@@ -4,7 +4,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls, terminals and DS form, served over HTTPS by Caddy with a self-signed certificate `just init` brings up a complete environment. `backup` and `destroy` still only print what they will do.
+> **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls, terminals and DS form, served over HTTPS by Caddy with a self-signed certificate. `just init` brings up a complete environment, and `just backup` and `just restore` save and put back what students produced. `destroy` still only prints what it will do.
 
 ## Usage
 
@@ -16,7 +16,8 @@ just status         # show the parameters and the environment's containers
 just init           # create a new environment
 just credentials    # print the web page's passwords
 just cert           # print the web page's certificate: path, expiry, SHA-256 fingerprint
-just backup         # save every node's config, zones and keys
+just backup         # save every node's config, zones and keys, the master's state and the passwords
+just restore FILE   # put a backup back into a matching environment
 just destroy        # back up, then remove the environment completely
 just build          # build the lab images
 just test-node      # boot a throwaway node and check it
@@ -25,6 +26,7 @@ just test-master    # bring up master + group01, check lab., the resolver and DS
 just test-web       # bring up master + 2 groups + web page, check login, controls, DS form, terminals and authorization, tear down
 just test-https     # bring up master + group01-0 + web page + Caddy, check HTTPS, tear down
 just test-init      # run the real init with 2 groups, check it and status, tear down
+just test-backup    # init, sign a group zone, back up, tear down, init, restore, check it validates, tear down
 ```
 
 `just init` takes about 40 seconds for 6 groups on kobe:
@@ -55,6 +57,38 @@ DNSLAB_HOST=lab.example.org
 
 The command line wins over `.env`, which wins over the defaults.
 
+## Backups
+
+`just backup` writes `state/backups/dns-lab-<host>-<YYYYmmdd-HHMMSS>.tar.gz`, mode 600 because it holds private keys, and prints its path and size. Containers can be running or stopped. The tarball holds the environment's part of `state/`, with paths relative to it:
+
+```
+env  credentials
+nodes/groupNN-N/{etc-bind,var-cache-bind,var-lib-bind}/   config, zones, journals, KASP keys and .state files
+master/                                                   lab. (with every published DS), its keys, the web page's TSIG key
+shared/lab-anchor.conf                                    lab.'s trust anchor, which must match master/'s keys
+web/  caddy/                                              session secret, certificate
+```
+
+KASP keys live in BIND's working directory, `var-cache-bind`, unless a student sets `key-directory`; any of the three directories is covered. Files keep their numeric owners, so the containers' `bind` user owns them again after a restore. A backup of a running lab is taken while named works; BIND replays its journals, so a zone updated mid-backup comes back at the state its journal reached.
+
+### Restoring
+
+`just restore state/backups/<file>.tar.gz` puts a backup back into an environment with the **same group count and host** (it compares `env`); otherwise it says which `init` to run first. It:
+1. runs `just backup`, so the state it replaces can be restored in turn;
+2. stops every lab container;
+3. replaces `state/`'s environment files with the tarball's (backups untouched);
+4. starts the master, waits for its resolver, starts the nodes, the web page and Caddy.
+
+Nodes that were stopped at backup time come back running. After `just destroy` (or on another host), first create a matching environment:
+
+```sh
+tar -xzOf state/backups/<file>.tar.gz env        # the backup's DNSLAB_GROUPS and DNSLAB_HOST
+just groups=N host=H init
+just restore state/backups/<file>.tar.gz
+```
+
+The passwords, the certificate and `lab.`'s key are the backup's again, so students keep their logins, and published DS records still match their zones. `just test-backup` checks this whole cycle.
+
 ## Layout
 
 ```
@@ -72,7 +106,7 @@ state/          generated per environment, gitignored:
   credentials         web page logins: instructor and one per group (mode 600)
   web/session-secret  signs the web page's session cookies
   caddy/              the web page's self-signed certificate and key, until #11
-  backups/            tarballs from `just backup`
+  backups/            tarballs from `just backup` (never removed by the recipes)
 ```
 
 Directories marked with an issue number are created by that issue.
