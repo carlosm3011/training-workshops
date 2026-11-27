@@ -26,6 +26,7 @@ El espíritu del curso es promover la experimentación: ninguna cantidad de lect
 5. [Monitoreo y troubleshooting](05-Monitoreo-Troubleshooting.md)
 6. [Arquitectura con hidden signer](06-Arquitectura-Hidden-Signer.md)
 7. [DNSSEC avanzado](07-DNSSEC-Avanzado.md)
+8. [Guía del laboratorio](08-Guia-del-Laboratorio.md): cómo usar el laboratorio del curso ([dns-lab](../dns-lab/README.md)) y los módulos 3, 4 y 6 hechos en él
 
 ## Materiales
 

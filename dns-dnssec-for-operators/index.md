@@ -78,3 +78,9 @@ Montevideo, 7 de agosto de 2026.
 - Algorithm rollover: cuándo migrar de algoritmo y cómo dnssec-policy gestiona la firma dual durante la transición
 - CDS/CDNSKEY: publicación automática para simplificar (donde el registrador lo soporte) la sincronización del DS con el padre
 - Multi-signer (RFC 8901, Model 2): motivación, soporte en BIND vía dnssec-policy, coordinación de DNSKEY/DS entre proveedores independientes
+
+## 8. Guía del laboratorio
+- Cómo entrar al laboratorio del curso: la página, las terminales, los nodos y direcciones de cada grupo, el certificado
+- Diferencias entre el laboratorio y el texto de los módulos
+- Módulos 3, 4 y 6 hechos en el laboratorio: primario y secundarios con TSIG, firma con KASP y publicación del DS en `lab.`, hidden signer
+- Verificar la cadena de confianza con delv (`delv-lab`, `+vtrace`), y romperla a propósito

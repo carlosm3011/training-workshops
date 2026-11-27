@@ -35,6 +35,7 @@ book:
     - 05-Monitoreo-Troubleshooting.qmd
     - 06-Arquitectura-Hidden-Signer.qmd
     - 07-DNSSEC-Avanzado.qmd
+    - 08-Guia-del-Laboratorio.qmd
 format:
   pdf:
     toc: true
