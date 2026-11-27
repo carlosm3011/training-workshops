@@ -23,7 +23,7 @@ So:
 - The resolver's own non-recursive queries to `10.53.0.1` land in the authoritative view.
 - A recursive query from outside the lab, such as the uplink side, falls to the authoritative view and is REFUSED.
 
-The master has a lab-internal IPv6 address but no IPv6 route to the Internet: the resolver's queries to IPv6 servers fail at once (`network unreachable` in the log) and it uses IPv4. It still answers the lab over IPv6. `max-recursion-queries 200` (default 50) lets it resolve names like `archive.ubuntu.com` or `pypi.org` with a cold cache, whose nameservers live in other domains; with the default, they SERVFAIL for a while after the master starts (#40). An earlier `server ::/0 { bogus yes; };` made that worse and was removed.
+The master has a lab-internal IPv6 address but no IPv6 route to the Internet: the resolver's queries to IPv6 servers fail at once (`network unreachable` in the log) and it uses IPv4. It still answers the lab over IPv6. Names whose nameservers live in other domains, like `archive.ubuntu.com` or `pypi.org`, are expensive with a cold cache: every attempt at an unreachable IPv6 server address counts toward BIND's per-lookup query limit, and with the default limit they SERVFAIL for a while after the master starts (#40). Two things fix it: `max-recursion-queries 200` (default 50), and **`dnslab-warm-cache`**, a boot service after named that resolves `com`/`net`/`org` NS and `archive`/`security.ubuntu.com` until they answer (a few seconds), so the TLD servers' addresses are cached. `just`'s `_wait_resolver` waits for it. An earlier `server ::/0 { bogus yes; };` made the failures more frequent and was removed.
 
 ## First boot and every boot
 
