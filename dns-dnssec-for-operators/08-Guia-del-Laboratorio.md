@@ -82,6 +82,7 @@ Los nodos son Ubuntu 24.04 con BIND 9.18 y systemd, igual que los servidores del
 | Archivo de zona en `/etc/bind/db.example.com` | En `/var/lib/bind/db.groupNN.lab`. Con firma inline (módulo 4), `named` escribe archivos junto al de la zona (`.signed`, `.jnl`), y no puede escribir en `/etc/bind`: falla con `permission denied`. `/var/lib/bind` es el directorio que Ubuntu prevé para eso. |
 | AppArmor | No está activo dentro de los containers; los errores de AppArmor del módulo 3 no aparecen. |
 | Delegación y glue en el padre | Ya están hechos para `ns0`, `ns1` y `ns2`. El DS lo publicas tú en el panel **DS en `lab.`**. |
+| `rndc reload example.com` tras activar la política | `rndc reconfig`: un cambio en `named.conf.local` no se aplica recargando solo la zona. |
 | `rndc signing -list` | `rndc dnssec -status groupNN.lab` (con `dnssec-policy`, BIND rechaza `signing -list`). |
 | `dnssec-verify … example.com.signed` | `rndc sync` primero y `-I raw` (ver el módulo 4, más abajo). |
 | `delv @127.0.0.1 …` | `delv-lab @10.53.0.1 …` (ver "Verificar la cadena de confianza"). |
@@ -290,11 +291,13 @@ zone "groupNN.lab" {
 
 ```
 # named-checkconf
-# rndc reload groupNN.lab
+# rndc reconfig
 # journalctl -u named --since "1 min ago" | grep groupNN
 # ls /etc/bind/keys/groupNN.lab/ /var/lib/bind/
 # rndc dnssec -status groupNN.lab
 ```
+
+Ojo con el comando de recarga: cambiaste la **configuración** de la zona (`named.conf.local`), no sus datos, así que hace falta `rndc reconfig` (o `rndc reload` sin nombre de zona). `rndc reload groupNN.lab` solo vuelve a leer el archivo de zona: responde `zone reload up-to-date`, la política no se aplica, y `rndc dnssec -status` dice `Zone does not have dnssec-policy`.
 
 En el directorio de claves vas a ver dos claves, cada una con sus archivos `.key`, `.private` y `.state` (el estado de KASP del que habla el módulo 6). En `/var/lib/bind/`, junto a tu archivo de zona, aparecen `db.groupNN.lab.signed` y los journals: esos son los archivos que `named` no habría podido crear en `/etc/bind`.
 
@@ -308,7 +311,7 @@ En el directorio de claves vas a ver dos claves, cada una con sus archivos `.key
 
 La tercera consulta va a un secundario: sirve la zona firmada sin que hayas tocado su configuración.
 
-`dnssec-verify` revisa el archivo firmado. Antes, `rndc sync` vuelca los cambios pendientes del journal al archivo, que además está en formato binario (`-I raw`):
+`dnssec-verify` revisa el archivo firmado. Dale a `named` un minuto para terminar de firmar la zona completa (antes de eso, `dnssec-verify` responde `No valid NSEC/NSEC3 chain`). Luego, `rndc sync` vuelca los cambios pendientes del journal al archivo, que además está en formato binario (`-I raw`):
 
 ```
 # rndc sync groupNN.lab
@@ -325,7 +328,7 @@ Y `delv`, con la variante del laboratorio:
 # delv-lab @10.53.0.1 www.groupNN.lab A
 ```
 
-Todavía no da `fully validated`: la zona está firmada y es consistente, pero `lab.` no tiene un DS que certifique tu KSK. Es el "eslabón roto" del módulo 4.
+Responde `; unsigned answer`: la zona está firmada y es consistente, pero `lab.` no tiene un DS que certifique tu KSK. Es el "eslabón roto" del módulo 4.
 
 ### 4. Publicar el DS en `lab.`
 
@@ -415,8 +418,21 @@ Otras dos opciones útiles:
 
 Estos ejercicios muestran cómo se ve una cadena rota. El panel limpia la caché del resolver del master después de cada cambio, así que el efecto se ve enseguida. Al terminar, deja publicado el DS correcto.
 
-1. **Sin DS**: en el panel, **Quitar** tu DS. Vuelve a correr `delv-lab @10.53.0.1 groupNN.lab SOA +vtrace` y `dig www.groupNN.lab A`. La respuesta sigue llegando, pero sin `ad`, y `delv` ya no dice `fully validated`: en la traza, `lab.` prueba con un NSEC firmado que no hay DS para tu zona. La zona pasa a ser insegura: firmada, pero sin nadie que la certifique.
-2. **DS equivocado**: publica tu DS con un carácter del digest cambiado (el panel solo revisa el formato, igual que un registrador real). Ahora `dig www.groupNN.lab A` devuelve `SERVFAIL`: el DS dice que la zona está firmada, pero ninguna clave coincide, así que el resolver no puede confiar en nada de la zona. Busca en la traza de `delv` el primer paso que no termina en `success`: está entre el DS y tu DNSKEY. Es el escenario 2 del [módulo 5](05-Monitoreo-Troubleshooting.md).
+1. **Sin DS**: en el panel, **Quitar** tu DS. Vuelve a correr `delv-lab @10.53.0.1 groupNN.lab SOA +vtrace` y `dig www.groupNN.lab A`. La respuesta sigue llegando, pero sin `ad`, y `delv` termina en `; unsigned answer`: en la traza, `lab.` prueba con un NSEC firmado que no hay DS para tu zona (`nonexistence proof(s) found`, `falling back to insecurity proof`). La zona pasa a ser insegura: firmada, pero sin nadie que la certifique.
+2. **DS equivocado**: quita tu DS y publica uno con un carácter del digest cambiado (el panel solo revisa el formato, igual que un registrador real). Ahora `dig www.groupNN.lab A` devuelve `SERVFAIL`: el DS dice que la zona está firmada, pero ninguna clave coincide, así que el resolver no puede confiar en nada de la zona. Con `dig +cd` (*checking disabled*: "no valides, dame los datos") la respuesta vuelve a aparecer: los datos están, lo que falla es la cadena.
+
+   `delv-lab … +vtrace` a secas solo dice `resolution failed: failure`, porque el resolver del master, que valida, se niega a entregarle los datos. Pídele que no valide con `+cdflag`, y `delv` hace toda la validación por su cuenta y muestra dónde se rompe:
+
+   ```
+   # delv-lab @10.53.0.1 groupNN.lab SOA +vtrace +cdflag
+   ...
+   ;; validating groupNN.lab/DS: marking as secure, noqname proof not needed
+   ;; validating groupNN.lab/DNSKEY: no DNSKEY matching DS
+   ;; validating groupNN.lab/DNSKEY: no valid signature found (DS)
+   ;; resolution failed: broken trust chain
+   ```
+
+   El DS es auténtico (`lab.` lo firmó), pero ninguna DNSKEY de tu zona coincide con él. Es el escenario 2 del [módulo 5](05-Monitoreo-Troubleshooting.md).
 3. **Arreglarlo**: quita el DS equivocado, publica el correcto y comprueba que vuelve `fully validated`.
 
 ## Módulo 6 en el laboratorio: hidden signer
