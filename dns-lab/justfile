@@ -292,7 +292,9 @@ test-master: build
     ok() { echo "ok   $*"; }
     fail() { echo "FAIL $*" >&2; exit 1; }
     flags() { sed -n 's/^;; flags: \([^;]*\);.*/\1/p'; }
-    update() { m nsupdate -k /etc/bind/dnslab-webapp.key; }  # stdin: update lines, without server/send
+    # stdin: update lines and send. Always lab.: at a delegation point nsupdate
+    # would otherwise find the child zone and send the update there.
+    update() { { printf 'server 127.0.0.1\nzone lab.\n'; cat; } | m nsupdate -k /etc/bind/dnslab-webapp.key; }
 
     # 1. lab. through the resolver: signed, validated
     out=$(x group01-0 dig @{{master4}} lab. SOA +dnssec)
@@ -515,12 +517,13 @@ test-web: build
                 "glue for an out-of-zone server|ns0.group02.lab. 10.53.1.10|sin glue" \
                 "in-zone server without glue|ns1.group01.lab.|necesita al menos una dirección" \
                 "the zone's own name|group01.lab. 10.53.1.10|igual que la zona" \
-                "a bad address|ns1.group01.lab. 10.53.1.300|no es una dirección IPv4 ni IPv6" \
-                "a server twice|ns1.group01.lab. 10.53.1.11"$'\n'"ns1.group01.lab. 10.53.1.12|dos veces"; do
+                "a bad address|ns1.group01.lab. 10.53.1.300|no es una dirección IPv4 ni IPv6"; do
         IFS='|' read -r why text want <<<"$case"
         msg=$(deleg group01 group01 "$text" | detail)
         [ "$(cat "$tmp/status")" = 400 ] && [[ "$msg" == *"$want"* ]] || fail "$why: got $(cat "$tmp/status") '$msg'"
     done
+    msg=$(deleg group01 group01 $'ns1.group01.lab. 10.53.1.11\nns1.group01.lab. 10.53.1.12' | detail)
+    [ "$(cat "$tmp/status")" = 400 ] && [[ "$msg" == *"dos veces"* ]] || fail "a server twice: got $(cat "$tmp/status") '$msg'"
     deleg group01 group02 "ns1.group02.lab. 10.53.2.11" >/dev/null
     [ "$(cat "$tmp/status")" = 403 ] || fail "group01 changing group02's delegation got $(cat "$tmp/status")"
     [ "$(referral group01.lab.)" = "$initial" ] \
