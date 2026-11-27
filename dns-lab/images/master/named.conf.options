@@ -6,14 +6,17 @@ options {
 
 	dnssec-validation auto;
 
+	// With a cold cache, names whose nameservers live in other domains
+	// (archive.ubuntu.com -> ns*.canonical.com, pypi.org -> four
+	// awsdns-* domains) take more than the default 50 upstream queries
+	// to resolve, and the resolver answers SERVFAIL for a while (#40).
+	max-recursion-queries 200;
+
 	listen-on-v6 { any; };
 };
 
-// The master has an IPv6 address on the lab network (fd53::1) but no
-// IPv6 route to the Internet (GOAL.md: IPv6 is lab-internal in M0).
-// Without this, named tries the IPv6 addresses of root and TLD servers,
-// and cold-cache lookups can end in SERVFAIL. It still answers queries
-// from the lab over IPv6.
-server ::/0 {
-	bogus yes;
-};
+// The master has an IPv6 address on the lab network (fd53::1) but no IPv6
+// route to the Internet (GOAL.md: IPv6 is lab-internal in M0). Queries to
+// IPv6 servers fail at once with "network unreachable" and named moves on
+// to IPv4. Don't mark ::/0 bogus: that made cold-cache lookups fail more
+// often, not less (#40).

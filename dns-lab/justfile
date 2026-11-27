@@ -251,6 +251,14 @@ test-net: build
         && ok "node reaches https://www.lacnic.net through the master" || fail "node can't reach the Internet"
     srv=$(x group01-0 dig www.lacnic.net | sed -n 's/^;; SERVER: \([^#]*\)#.*/\1/p')
     [ "$srv" = {{master4}} ] && ok "dig on a node is answered by {{master4}}" || fail "dig answered by '$srv'"
+    # #40: names whose nameservers live in other domains, with a cold cache.
+    docker exec {{master_name}} rndc flush
+    for n in archive.ubuntu.com security.ubuntu.com pypi.org github.com deb.debian.org; do
+        [ "$(x group01-0 dig +time=10 +tries=1 $n A | grep -oE 'status: [A-Z]+')" = "status: NOERROR" ] || fail "cold cache: $n doesn't resolve"
+    done
+    ok "with a cold cache, archive/security.ubuntu.com, pypi.org, github.com, deb.debian.org resolve at once"
+    docker exec {{master_name}} rndc flush
+    x group01-0 apt-get install -y -q tree >/dev/null 2>&1 && ok "apt-get install on a node right after a cache flush" || fail "apt-get install"
     docker stop {{master_name}} >/dev/null
     ! x group01-0 curl -sSI -m 5 -o /dev/null https://1.1.1.1 2>/dev/null \
         && ok "with the master stopped, the node can't reach the Internet" || fail "node bypasses the master"
