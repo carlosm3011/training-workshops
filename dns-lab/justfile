@@ -292,7 +292,9 @@ test-master: build
     ok() { echo "ok   $*"; }
     fail() { echo "FAIL $*" >&2; exit 1; }
     flags() { sed -n 's/^;; flags: \([^;]*\);.*/\1/p'; }
-    update() { m nsupdate -k /etc/bind/dnslab-webapp.key; }  # stdin: update lines, without server/send
+    # stdin: update lines and send. Always lab.: at a delegation point nsupdate
+    # would otherwise find the child zone and send the update there.
+    update() { { printf 'server 127.0.0.1\nzone lab.\n'; cat; } | m nsupdate -k /etc/bind/dnslab-webapp.key; }
 
     # 1. lab. through the resolver: signed, validated
     out=$(x group01-0 dig @{{master4}} lab. SOA +dnssec)
@@ -324,12 +326,19 @@ test-master: build
         && ok "web page key adds a DS for group01.lab." || fail "can't add DS"
     printf 'update delete group01.lab. DS\nsend\n' | update && [ -z "$(x group01-0 dig +norec +short @{{master4}} group01.lab. DS)" ] \
         && ok "web page key deletes it" || fail "can't delete DS"
-    for bad in "update add group01.lab. 60 IN NS evil.example." \
+    printf 'update add group01.lab. 60 IN NS ns3.group01.lab.\nupdate add ns3.group01.lab. 60 IN A 10.53.1.10\nsend\n' | update \
+        && x group01-0 dig +norec @{{master4}} group01.lab. NS | grep -E '^ns3\.group01\.lab\.\s.*\sA\s+10\.53\.1\.10$' >/dev/null \
+        && printf 'update delete group01.lab. IN NS ns3.group01.lab.\nupdate delete ns3.group01.lab. IN A\nsend\n' | update \
+        && ok "web page key changes group01.lab.'s NS set and its glue (#33)" || fail "can't change NS/glue"
+    for bad in "update add lab. 60 IN NS evil.example." \
                "update add foo.lab. 60 IN DS 12345 13 2 0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF" \
-               "update add ns.lab. 60 IN A 192.0.2.66"; do
+               "update add ns.lab. 60 IN A 192.0.2.66" \
+               "update add group01.lab. 60 IN A 192.0.2.66" \
+               "update add ns0.group01.lab. 60 IN TXT evil" \
+               "update add evil.group01.lab. 60 IN NS ns.evil.example."; do
         ! printf '%s\nsend\n' "$bad" | update >/dev/null 2>&1 || fail "allowed: $bad"
     done
-    ok "web page key can't change NS, DS outside groupNN.lab. or other records"
+    ok "web page key can't change lab.'s own NS, DS or NS outside groupNN.lab., or other records"
     ! printf 'update add %s\nsend\n' "$fake" | m nsupdate >/dev/null 2>&1 \
         && ok "unsigned update refused" || fail "unsigned update accepted"
 
@@ -487,6 +496,60 @@ test-web: build
     ds instructor group02 text "$other" >/dev/null && lab_ds group02.lab. | grep "^$tag " >/dev/null \
         && ds instructor group02 record "${other#* DS }" /delete >/dev/null && [ -z "$(lab_ds group02.lab.)" ] \
         && ok "instructor publishes and removes a DS for group02" || fail "instructor DS: $(cat "$tmp/body")"
+
+    # Delegation (#33): the NS set and glue of group01.lab. in lab.
+    deleg() { curl -s -o "$tmp/body" -w '%{http_code}' -b "$tmp/$1" -H 'Content-Type: application/json' \
+        --data "$(python3 -c 'import json, sys; print(json.dumps({"text": sys.argv[1]}))' "$3")" \
+        "$url/api/delegation/$2" > "$tmp/status"; cat "$tmp/body"; }
+    referral() {  # "NS names | glue lines", sorted, as lab. hands them out
+        docker exec group01-0 dig +norec +noall +authority +additional @{{master4}} "$1" NS \
+            | awk '$4 == "NS" { ns = ns " " $5 } $4 == "A" || $4 == "AAAA" { g = g " " $1 "=" $5 } END { print ns " |" g }' \
+            | python3 -c 'import sys; ns, g = sys.stdin.read().split("|"); print(" ".join(sorted(ns.split())), "|", " ".join(sorted(g.split())))'
+    }
+    defaults=$'ns0.group01.lab. 10.53.1.10 fd53::1:10\nns1.group01.lab. 10.53.1.11 fd53::1:11\nns2.group01.lab. 10.53.1.12 fd53::1:12'
+    initial=$(referral group01.lab.)
+    [ "$(api group01 GET /api/delegation/group01 | python3 -c 'import json, sys; print(json.load(sys.stdin)["text"])')" = "$defaults" ] \
+        && ok "the page lists group01.lab.'s delegation: ns0-2 with their A and AAAA glue" || fail "delegation list: $(cat "$tmp/body")"
+    for case in "nothing|; just a comment|al menos un servidor" \
+                "another group's address|ns1.group01.lab. 10.53.2.11|no es una dirección de tu grupo" \
+                "an address outside the lab|ns1.group01.lab. 192.0.2.1|no es una dirección de tu grupo" \
+                "IPv6 outside the group|ns1.group01.lab. fd53::2:11|no es una dirección de tu grupo" \
+                "glue for an out-of-zone server|ns0.group02.lab. 10.53.1.10|sin glue" \
+                "in-zone server without glue|ns1.group01.lab.|necesita al menos una dirección" \
+                "the zone's own name|group01.lab. 10.53.1.10|igual que la zona" \
+                "a bad address|ns1.group01.lab. 10.53.1.300|no es una dirección IPv4 ni IPv6"; do
+        IFS='|' read -r why text want <<<"$case"
+        msg=$(deleg group01 group01 "$text" | detail)
+        [ "$(cat "$tmp/status")" = 400 ] && [[ "$msg" == *"$want"* ]] || fail "$why: got $(cat "$tmp/status") '$msg'"
+    done
+    msg=$(deleg group01 group01 $'ns1.group01.lab. 10.53.1.11\nns1.group01.lab. 10.53.1.12' | detail)
+    [ "$(cat "$tmp/status")" = 400 ] && [[ "$msg" == *"dos veces"* ]] || fail "a server twice: got $(cat "$tmp/status") '$msg'"
+    deleg group01 group02 "ns1.group02.lab. 10.53.2.11" >/dev/null
+    [ "$(cat "$tmp/status")" = 403 ] || fail "group01 changing group02's delegation got $(cat "$tmp/status")"
+    [ "$(referral group01.lab.)" = "$initial" ] \
+        && ok "rejected with a message, lab. unchanged: empty, another group's or outside addresses, glue out of zone, missing glue, the zone's name, bad address, duplicates, another group" \
+        || fail "a rejected delegation reached lab.: $(referral group01.lab.)"
+    deleg group01 group01 $'ns1.group01.lab. 10.53.1.11 fd53::1:11\nns2.group01.lab. 10.53.1.12 fd53::1:12' >/dev/null
+    [ "$(cat "$tmp/status")" = 200 ] \
+        && [ "$(referral group01.lab.)" = "ns1.group01.lab. ns2.group01.lab. | ns1.group01.lab.=10.53.1.11 ns1.group01.lab.=fd53::1:11 ns2.group01.lab.=10.53.1.12 ns2.group01.lab.=fd53::1:12" ] \
+        && [ "$(docker exec group01-0 dig +short www.group01.lab. A)" = 10.53.1.10 ] \
+        && ok "module 6: ns0 taken out; lab. refers to ns1 and ns2 only, without ns0's glue, and the zone still resolves" \
+        || fail "remove ns0: $(cat "$tmp/status") $(cat "$tmp/body") / $(referral group01.lab.)"
+    [ "$(deleg group01 group01 $'ns2.group01.lab. 10.53.1.12 fd53::1:12\nns1.group01.lab. fd53::1:11 10.53.1.11' | python3 -c 'import json, sys; print(json.load(sys.stdin)["message"])')" = "Sin cambios: la delegación ya era esa." ] \
+        && ok "the same delegation in another order is a no-op" || fail "no-op: $(cat "$tmp/body")"
+    deleg group01 group01 $'ns1.group01.lab. 10.53.1.11\nns3.group01.lab. 10.53.1.10 fd53::1:99\nns0.group02.lab.' >/dev/null
+    [ "$(cat "$tmp/status")" = 200 ] \
+        && [ "$(referral group01.lab.)" = "ns0.group02.lab. ns1.group01.lab. ns3.group01.lab. | ns0.group02.lab.=10.53.2.10 ns0.group02.lab.=fd53::2:10 ns1.group01.lab.=10.53.1.11 ns3.group01.lab.=10.53.1.10 ns3.group01.lab.=fd53::1:99" ] \
+        && ok "a new in-zone server (ns3, any of the group's addresses) and an out-of-zone one (ns0.group02.lab., whose addresses come from group02's own glue)" \
+        || fail "ns3 + out-of-zone: $(cat "$tmp/status") $(cat "$tmp/body") / $(referral group01.lab.)"
+    deleg group01 group01 "$defaults" >/dev/null
+    [ "$(cat "$tmp/status")" = 200 ] && [ "$(referral group01.lab.)" = "$initial" ] \
+        && ok "saving the initial values puts ns0-2 and their glue back exactly" || fail "restore: $(referral group01.lab.)"
+    deleg instructor group02 "ns1.group02.lab. 10.53.2.11" >/dev/null
+    [ "$(cat "$tmp/status")" = 200 ] && [ "$(referral group02.lab.)" = "ns1.group02.lab. | ns1.group02.lab.=10.53.2.11" ] \
+        && deleg instructor group02 $'ns0.group02.lab. 10.53.2.10 fd53::2:10\nns1.group02.lab. 10.53.2.11 fd53::2:11\nns2.group02.lab. 10.53.2.12 fd53::2:12' >/dev/null \
+        && [ "$(cat "$tmp/status")" = 200 ] \
+        && ok "instructor changes and restores group02's delegation" || fail "instructor delegation: $(cat "$tmp/body")"
 
     curl -s -o /dev/null -b "$tmp/group01" -c "$tmp/group01" -X POST "$url/logout"
     api group01 GET /api/nodes >/dev/null

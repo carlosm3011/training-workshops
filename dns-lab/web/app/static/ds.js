@@ -1,16 +1,16 @@
 // DS records of groupNN.lab. in lab. (#10): lists them from /api/ds/<group>,
 // publishes pasted lines and removes single records. The instructor picks
-// the group from a menu; a group only ever has its own.
+// the group from the registrar section's menu; a group only ever has its own.
 
-const dsSection = document.getElementById("ds");
-const dsGroupSel = document.getElementById("ds-group");
+const regSection = document.getElementById("registrar");
+const regGroupSel = document.getElementById("reg-group");
 const dsForm = document.getElementById("ds-form");
 const dsMsg = document.getElementById("ds-message");
 const ALGORITHMS = { 8: "RSASHA256", 10: "RSASHA512", 13: "ECDSAP256SHA256", 14: "ECDSAP384SHA384", 15: "ED25519", 16: "ED448" };
 const DIGESTS = { 1: "SHA-1", 2: "SHA-256", 4: "SHA-384" };
 
-function dsGroup() {
-  return dsGroupSel ? dsGroupSel.value : dsSection.dataset.groups;
+function regGroup() {
+  return regGroupSel ? regGroupSel.value : regSection.dataset.groups;
 }
 
 function dsShow(text, isError) {
@@ -50,7 +50,7 @@ function dsRender(records) {
 }
 
 async function dsCall(action, body, btn) {
-  const url = `/api/ds/${encodeURIComponent(dsGroup())}${action === "delete" ? "/delete" : ""}`;
+  const url = `/api/ds/${encodeURIComponent(regGroup())}${action === "delete" ? "/delete" : ""}`;
   if (btn) btn.disabled = true;
   try {
     const r = await fetch(url, body
@@ -81,9 +81,9 @@ dsForm.addEventListener("submit", async (ev) => {
   const text = dsForm.elements.text;
   if (await dsCall("add", { text: text.value }, dsForm.querySelector("button"))) text.value = "";
 });
-if (dsGroupSel) {
-  dsGroupSel.addEventListener("change", () => {
-    dsForm.elements.text.placeholder = `${dsGroup()}.lab. IN DS 12345 13 2 3F8A…`;
+if (regGroupSel) {
+  regGroupSel.addEventListener("change", () => {
+    dsForm.elements.text.placeholder = `${regGroup()}.lab. IN DS 12345 13 2 3F8A…`;
     dsShow("");
     dsLoad();
   });

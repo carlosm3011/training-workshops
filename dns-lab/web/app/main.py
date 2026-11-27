@@ -13,6 +13,7 @@ Configuration (environment, set by the justfile):
 """
 
 import asyncio
+import ipaddress
 import json
 import os
 import re
@@ -223,8 +224,9 @@ def api_action(request: Request, name: str, action: str):
 DS_TYPE_NAMES = {1: "SHA-1", 2: "SHA-256", 4: "SHA-384"}
 
 
-class DSError(ValueError):
-    """A pasted record we refuse; the message is shown to the student."""
+class FormError(ValueError):
+    """Form input we refuse (a DS line, a delegation); the message is shown
+    to the student."""
 
 
 def zone_of(group: str) -> dns.name.Name:
@@ -246,27 +248,27 @@ def parse_ds_line(line: str, zone: dns.name.Name):
     dnssec-dsfromkey or dig print it, and check it belongs to ``zone``."""
     tokens = line.split()
     if len(tokens) < 2:
-        raise DSError(f"No es un registro DS: «{line}».")
+        raise FormError(f"No es un registro DS: «{line}».")
     try:
         owner = dns.name.from_text(tokens[0])
     except dns.exception.DNSException:
-        raise DSError(f"Nombre inválido: «{tokens[0]}».") from None
+        raise FormError(f"Nombre inválido: «{tokens[0]}».") from None
     rest = tokens[1:]
     # TTL and class, in either order, as in a zone file
     while rest and (rest[0].isdigit() or rest[0].upper() == "IN"):
         rest = rest[1:]
     if not rest:
-        raise DSError(f"No es un registro DS: «{line}».")
+        raise FormError(f"No es un registro DS: «{line}».")
     if rest[0].upper() != "DS":
-        raise DSError(f"Es un registro {rest[0].upper()}, no DS. Pegá la salida de dnssec-dsfromkey.")
+        raise FormError(f"Es un registro {rest[0].upper()}, no DS. Pegá la salida de dnssec-dsfromkey.")
     if owner != zone:
-        raise DSError(f"Solo podés publicar DS para {zone.to_text()} y este es para {owner.to_text()}")
+        raise FormError(f"Solo podés publicar DS para {zone.to_text()} y este es para {owner.to_text()}")
     try:
         rd = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DS, " ".join(rest[1:]))
     except dns.exception.DNSException as e:
-        raise DSError(f"El DS no es válido ({e}).") from None
+        raise FormError(f"El DS no es válido ({e}).") from None
     if rd.digest_type not in DS_TYPE_NAMES:
-        raise DSError(f"Tipo de digest {rd.digest_type} desconocido: usá 2 (SHA-256) o 4 (SHA-384).")
+        raise FormError(f"Tipo de digest {rd.digest_type} desconocido: usá 2 (SHA-256) o 4 (SHA-384).")
     return rd
 
 
@@ -275,9 +277,9 @@ def parse_ds_input(text: str, zone: dns.name.Name) -> list:
     lines = [l.strip() for l in text.splitlines()]
     lines = [l for l in lines if l and not l.startswith(";")]
     if not lines:
-        raise DSError("Pegá al menos un registro DS.")
+        raise FormError("Pegá al menos un registro DS.")
     if len(lines) > 10:
-        raise DSError("Demasiadas líneas: pegá solo los registros DS.")
+        raise FormError("Demasiadas líneas: pegá solo los registros DS.")
     return [parse_ds_line(l, zone) for l in lines]
 
 
@@ -343,7 +345,7 @@ def api_ds_add(request: Request, group: str, text: str = Body(..., embed=True)):
     zone = ds_zone_for(require_user(request), group)
     try:
         new = parse_ds_input(text, zone)
-    except DSError as e:
+    except FormError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     have = {ds_text(rd) for rd in current_ds(zone)}
     add = [rd for rd in new if ds_text(rd) not in have]
@@ -367,6 +369,138 @@ def api_ds_delete(request: Request, group: str, record: str = Body(..., embed=Tr
     nsupdate([f"update delete {zone.to_text()} IN DS {ds_text(rd)}"])
     flush_resolver(zone)
     return ds_response(zone, f"DS {rd.key_tag} quitado de {PARENT.to_text()}")
+
+
+# --- Delegation in lab. (#33) -------------------------------------------------
+#
+# The other half of a registrar's panel: the NS records of groupNN.lab. in
+# lab., and the glue (A/AAAA) for servers inside the zone. The form takes
+# the whole delegation, one server per line, and replaces it in a single
+# update, so module 6 can take ns0 out of the delegation. The app checks
+# names and addresses; update-policy lets the key change only NS at
+# groupNN.lab. and A/AAAA below it.
+
+MAX_SERVERS = 8
+MAX_ADDRESSES = 4
+
+
+def group_networks(group: str) -> tuple:
+    """The group's own addresses, the only ones allowed as glue:
+    10.53.G.0/24 and fd53::G:0/112 (G = the group number, as in the
+    nodes' addresses)."""
+    g = int(group[len("group"):])
+    return ipaddress.ip_network(f"10.53.{g}.0/24"), ipaddress.ip_network(f"fd53::{g}:0/112")
+
+
+def current_delegation(zone: dns.name.Name) -> list[dict]:
+    """The referral lab. hands out for ``zone``: its NS names, with the glue
+    addresses for those inside the zone. Sorted by name."""
+    code, out = master_run(["dig", "+norec", "+noall", "+authority", "+additional",
+                            "@127.0.0.1", zone.to_text(), "NS"])
+    if code != 0:
+        raise HTTPException(status_code=503, detail="No se pudo consultar lab. en el servidor maestro.")
+    servers, glue = [], {}
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) < 5:
+            continue
+        owner = dns.name.from_text(f[0])
+        if f[3] == "NS" and owner == zone:
+            servers.append(dns.name.from_text(f[4]))
+        elif f[3] in ("A", "AAAA"):
+            glue.setdefault(owner, []).append(f[4])
+    return [{"name": n.to_text(),
+             "addresses": sorted(glue.get(n, []), key=lambda a: (":" in a, ipaddress.ip_address(a))) if n.is_subdomain(zone) else []}
+            for n in sorted(set(servers))]
+
+
+def delegation_text(servers: list[dict]) -> str:
+    return "\n".join(" ".join([s["name"], *s["addresses"]]) for s in servers)
+
+
+def parse_delegation(text: str, zone: dns.name.Name, group: str) -> list[dict]:
+    """One "name [address …]" per line; all or nothing."""
+    lines = [l.split(";", 1)[0].strip() for l in text.splitlines()]
+    lines = [l for l in lines if l]
+    if not lines:
+        raise FormError("La delegación necesita al menos un servidor.")
+    if len(lines) > MAX_SERVERS:
+        raise FormError(f"Demasiados servidores: como máximo {MAX_SERVERS}.")
+    net4, net6 = group_networks(group)
+    servers, seen = [], set()
+    for line in lines:
+        tokens = line.split()
+        try:
+            name = dns.name.from_text(tokens[0])
+        except dns.exception.DNSException:
+            raise FormError(f"Nombre inválido: «{tokens[0]}».") from None
+        if name in seen:
+            raise FormError(f"{name.to_text()} aparece dos veces.")
+        seen.add(name)
+        if name == zone:
+            raise FormError(f"El servidor no puede llamarse igual que la zona ({zone.to_text()}).")
+        inside = name.is_subdomain(zone)
+        addresses = []
+        for a in tokens[1:]:
+            try:
+                ip = ipaddress.ip_address(a)
+            except ValueError:
+                raise FormError(f"«{a}» no es una dirección IPv4 ni IPv6 ({name.to_text()}).") from None
+            if ip not in (net4 if ip.version == 4 else net6):
+                raise FormError(f"{a} no es una dirección de tu grupo: usa {net4} o {net6}.")
+            addresses.append(ip.compressed)
+        if inside and not addresses:
+            raise FormError(f"{name.to_text()} está dentro de {zone.to_text()}: necesita al menos una dirección (glue).")
+        if not inside and addresses:
+            raise FormError(f"{name.to_text()} está fuera de {zone.to_text()}: sus direcciones no van en lab. (sin glue).")
+        if len(addresses) > MAX_ADDRESSES:
+            raise FormError(f"Demasiadas direcciones para {name.to_text()}: como máximo {MAX_ADDRESSES}.")
+        servers.append({"name": name.to_text(), "addresses": sorted(set(addresses), key=lambda a: (":" in a, ipaddress.ip_address(a)))})
+    return sorted(servers, key=lambda s: dns.name.from_text(s["name"]))
+
+
+def delegation_response(zone: dns.name.Name, message: str = "") -> dict:
+    servers = current_delegation(zone)
+    return {"zone": zone.to_text(), "servers": servers, "text": delegation_text(servers), "message": message}
+
+
+@app.get("/api/delegation/{group}")
+def api_delegation(request: Request, group: str):
+    zone = ds_zone_for(require_user(request), group)
+    return delegation_response(zone)
+
+
+@app.post("/api/delegation/{group}")
+def api_delegation_set(request: Request, group: str, text: str = Body(..., embed=True)):
+    zone = ds_zone_for(require_user(request), group)
+    try:
+        new = parse_delegation(text, zone, group)
+    except FormError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    old = current_delegation(zone)
+    if new == old:
+        return delegation_response(zone, "Sin cambios: la delegación ya era esa.")
+    z = zone.to_text()
+    lines = [f"update delete {z} IN NS"]
+    # Glue of every in-zone server, old or new, is rewritten from scratch.
+    for name in {s["name"] for s in old + new if dns.name.from_text(s["name"]).is_subdomain(zone)}:
+        lines += [f"update delete {name} IN A", f"update delete {name} IN AAAA"]
+    for s in new:
+        lines.append(f"update add {z} {DS_TTL} IN NS {s['name']}")
+        for a in s["addresses"]:
+            lines.append(f"update add {s['name']} {DS_TTL} IN {'AAAA' if ':' in a else 'A'} {a}")
+    try:
+        nsupdate(lines)
+    except HTTPException as e:
+        if "REFUSED" in str(e.detail):
+            # A lab created before #33: its update-policy only grants DS.
+            raise HTTPException(status_code=502, detail="lab. rechazó el cambio (REFUSED). Este laboratorio se "
+                                "creó antes de que la página pudiera cambiar la delegación: pídele al instructor "
+                                "que lo habilite (guía del instructor) o que haga el cambio.") from None
+        raise
+    flush_resolver(zone)
+    n = len(new)
+    return delegation_response(zone, f"Delegación actualizada en {PARENT.to_text()}: {n} servidor{'es' if n > 1 else ''}.")
 
 
 # --- Terminals ---------------------------------------------------------------

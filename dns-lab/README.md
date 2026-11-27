@@ -6,7 +6,7 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** usable for courses. Modules 3, 4 and 6 of the student guide have been run end to end in the lab. Open: NS and glue changes from the web page (#33, needed for module 6 without hand edits), the guide as HTML in the web page (#32), Let's Encrypt (#11).
+> **Status:** usable for courses. Modules 3, 4 and 6 of the student guide have been run end to end in the lab. Open: the guide as HTML in the web page (#32), neutral Spanish in the page (#34), Let's Encrypt (#11).
 
 ## Instructor guide
 
@@ -51,7 +51,7 @@ just cert                  # the certificate's SHA-256 fingerprint
   ```
 
   `just backup` doesn't include the set-aside directory; delete it when it's no longer needed. A DS the group published stays in `lab.` until they remove it in the page.
-- **A group's DS**: the instructor login can list, publish and remove any group's DS in the page, which also clears the resolver's cache for that zone.
+- **A group's DS or delegation**: the instructor login can change any group's DS, NS and glue in the page, which also clears the resolver's cache for that zone.
 - **Common student problems**:
   - `systemctl` fails with `Too many open files`: the host's inotify limits are too low (see below). `init` fixes this on new labs.
   - `apt install` says `Unable to locate package`: run `apt update` first (images built before #30 have no package lists).
@@ -59,9 +59,23 @@ just cert                  # the certificate's SHA-256 fingerprint
   - A closed terminal tab kills the shell and its jobs; long-running commands need the tab left open.
   - `delv` on `lab.` names needs `delv-lab`, and `+cdflag` to see where a broken chain fails (see the student guide).
 
-### Changing lab. by hand (module 6, until #33)
+### Module 6: changing a group's delegation
 
-Module 6 removes `ns0.groupNN.lab.` from the group's delegation in `lab.`, which the web page can't do yet (#33). `lab.` is a dynamic, signed zone, so the edit goes through `rndc freeze`/`thaw`. **`rndc freeze` reports success before named has written the zone file**, so wait until the file's serial matches the one named serves before editing; otherwise the edit goes into an old file and the thaw discards every DS change since that file was written. While `lab.` is frozen, no group can publish a DS, so keep it short.
+Module 6 takes `ns0.groupNN.lab.` out of the group's delegation in `lab.`. Groups do it themselves in the page's **Servidores de nombres** form, and the instructor can do it for any group. The form's **Valores iniciales** button restores `ns0`–`ns2`.
+
+**A lab created before #33** needs two things first. Running containers keep working throughout; only the web page restarts, for about 3 seconds, which closes open terminal tabs:
+
+```sh
+git pull && just build                       # new web page image (other images too; running containers keep theirs)
+docker rm -f dnslab-web && just _web         # replace the web page only
+docker exec dnslab-master sh -c 'sed -i "s/^\(\s*\)grant dnslab-webapp name \(group[0-9]*\.lab\.\) DS;$/&\n\1grant dnslab-webapp name \2 NS;\n\1grant dnslab-webapp wildcard *.\2 A AAAA;/" /etc/bind/named.conf.lab && named-checkconf && rndc reconfig'
+```
+
+The last line adds the NS and glue grants for every group to `lab.`'s `update-policy`; run it once. Without it, saving the form answers REFUSED and the page says the instructor has to enable it.
+
+### Changing lab. by hand
+
+Should you need to change `lab.` in a way the page doesn't offer, edit it through `rndc freeze`/`thaw`, since it's a dynamic, signed zone. **`rndc freeze` reports success before named has written the zone file**, so wait until the file's serial matches the one named serves before editing. Otherwise the edit goes into an old file, and the thaw discards every change since that file was written, DS records included. While `lab.` is frozen, no group can publish a DS or change its delegation, so keep it short.
 
 ```sh
 docker exec -it dnslab-master bash
@@ -75,13 +89,7 @@ rndc thaw lab in authoritative
 rndc flushtree groupNN.lab resolver
 ```
 
-In the file, named has rewritten everything with `$ORIGIN` lines and relative names. To remove `ns0` from group 02:
-- under `$ORIGIN lab.`, delete the line `NS ns0.group02` in the `group02` block; if that line carries the owner name `group02`, move the name onto the next line;
-- under `$ORIGIN group02.lab.`, delete `ns0` and its `A` and `AAAA` lines;
-- increase the number on the `; serial` line;
-- leave every `RRSIG`, `NSEC` and `DNSKEY` alone: named re-signs what changed.
-
-Records you add must use fully qualified names ending in a dot. Afterwards, check that the thaw loaded your serial and kept the journal: `journalctl -u named -n 20` must not say `has gone backwards` or `journal file is out of date`. Then `dig +norec @127.0.0.1 group02.lab NS` shows the new referral.
+In the file, named has rewritten everything with `$ORIGIN` lines and relative names. Records you add must use fully qualified names ending in a dot; increase the number on the `; serial` line; leave every `RRSIG`, `NSEC` and `DNSKEY` alone, since named re-signs what changed. Afterwards, check that the thaw loaded your serial and kept the journal: `journalctl -u named -n 20` must not say `has gone backwards` or `journal file is out of date`.
 
 ### After a course
 
@@ -114,7 +122,7 @@ just build          # build the lab images
 just test-node      # boot a throwaway node and check it
 just test-net       # bring up master + 2 groups, check addressing and routing, tear down
 just test-master    # bring up master + group01, check lab., the resolver and DS publishing, tear down
-just test-web       # bring up master + 2 groups + web page, check login, controls, DS form, terminals and authorization, tear down
+just test-web       # bring up master + 2 groups + web page, check login, controls, delegation and DS forms, terminals and authorization, tear down
 just test-https     # bring up master + group01-0 + web page + Caddy, check HTTPS, tear down
 just test-init      # run the real init with 2 groups, check it and status, tear down
 just test-destroy   # destroy with no environment, answering no, destroy + init again, options; removes the images
@@ -200,7 +208,7 @@ justfile        lifecycle recipes (init, destroy, backup, status, credentials)
 GOAL.md         requirements and design decisions
 images/node/    node image: Ubuntu 24.04, systemd, bind9 (see its README)
 images/master/  master image: NAT gateway, lab. zone, resolver (see its README)
-web/            web page: login, node list, controls, terminals, DS form (see its README)
+web/            web page: login, node list, controls, terminals, NS/glue and DS forms (see its README)
 caddy/          Caddyfile: HTTPS for the web page on ports 80 and 443
 state/          generated per environment, gitignored:
   env                 the environment's group count and host, written by init
@@ -241,12 +249,12 @@ Directories marked with an issue number are created by that issue.
 - Nodes route to the Internet only through the master, and use it as their resolver. If the master is stopped, the nodes are cut off.
 - IPv6 works between all containers on `dns-lab`, but there's no IPv6 route to the Internet in M0.
 - All nodes share one subnet, so groups can reach each other's nodes directly.
-- Each group's zone is `groupNN.lab.`, delegated from the master's `lab.` zone to `ns0`, `ns1` and `ns2.groupNN.lab.`, the group's three nodes in order. Students publish their DS in `lab.` through the web page's DS form.
+- Each group's zone is `groupNN.lab.`, delegated from the master's `lab.` zone to `ns0`, `ns1` and `ns2.groupNN.lab.`, the group's three nodes in order. Students change their NS, glue and DS in `lab.` through the web page's registrar section.
 - The master's resolver validates `lab.` names with `lab.`'s own trust anchor. `dig` shows the `ad` flag as usual; for `delv`, use the nodes' `delv-lab` wrapper (see [images/node](images/node/README.md)).
 
 ## Web page
 
-The page is at `https://<host>/` (`https://kobe.labs.lacnic.net/` by default): Caddy (`dnslab-caddy`) listens on ports 443 and 80, redirects HTTP to HTTPS and proxies to `dnslab-web` over a small bridge network, `dns-lab-front`, which the lab can't reach. Until Let's Encrypt (#11), the certificate is self-signed, generated per environment for `host` and valid for a year, so students accept the browser's warning once. `just cert` prints its SHA-256 fingerprint, so you can tell students what the warning should show. `dnslab-web` itself only listens on `127.0.0.1:8080`, for the tests and SSH tunnels. Groups log in with the passwords from `just credentials` and see only their own nodes; the instructor sees everything. Clicking a node's name opens a root shell on it in a new tab. Below the nodes, **DS en lab.** lists, publishes and removes the DS records of the group's zone. See [web/README.md](web/README.md).
+The page is at `https://<host>/` (`https://kobe.labs.lacnic.net/` by default): Caddy (`dnslab-caddy`) listens on ports 443 and 80, redirects HTTP to HTTPS and proxies to `dnslab-web` over a small bridge network, `dns-lab-front`, which the lab can't reach. Until Let's Encrypt (#11), the certificate is self-signed, generated per environment for `host` and valid for a year, so students accept the browser's warning once. `just cert` prints its SHA-256 fingerprint, so you can tell students what the warning should show. `dnslab-web` itself only listens on `127.0.0.1:8080`, for the tests and SSH tunnels. Groups log in with the passwords from `just credentials` and see only their own nodes; the instructor sees everything. Clicking a node's name opens a root shell on it in a new tab. Below the nodes, a registrar section edits the group's delegation (NS and glue) and its DS records in `lab.`. See [web/README.md](web/README.md).
 
 ## DNS names in the lab
 

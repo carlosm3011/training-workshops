@@ -20,35 +20,64 @@
 </table>
 <p id="message" class="error" hidden></p>
 
-<section id="ds" data-groups="{{ groups | join(' ') }}">
+<section id="registrar" data-groups="{{ groups | join(' ') }}">
   <h2>
-    DS en <code>lab.</code>
     {% if groups | length > 1 %}
-    <select id="ds-group" aria-label="Grupo">
+    <select id="reg-group" aria-label="Grupo">
       {% for g in groups %}<option value="{{ g }}">{{ g }}.lab.</option>{% endfor %}
     </select>
     {% else %}
-    para <code>{{ groups[0] }}.lab.</code>
+    <code>{{ groups[0] }}.lab.</code>
     {% endif %}
+    en <code>lab.</code>
   </h2>
   <p class="hint">
-    Como en el panel de un registrador: lo que publiques acá aparece en
-    <code>lab.</code>, la zona padre. Generá el DS en el nodo que firma, con
-    <code>dnssec-dsfromkey</code> sobre el archivo <code>.key</code> de la KSK,
-    y pegá la línea que imprime. Para cambiar un DS, publicá el nuevo antes de
-    quitar el viejo.
+    Como en el panel de un registrador: lo que cambies acá aparece en
+    <code>lab.</code>, la zona padre.
   </p>
-  <table id="ds-records">
-    <thead><tr><th>Key tag</th><th>Algoritmo</th><th>Digest</th><th></th></tr></thead>
-    <tbody><tr><td colspan="4" class="muted">Cargando…</td></tr></tbody>
-  </table>
-  <form id="ds-form">
-    <textarea name="text" rows="2" spellcheck="false" autocomplete="off"
-      placeholder="{{ groups[0] }}.lab. IN DS 12345 13 2 3F8A…"></textarea>
-    <button type="submit">Publicar DS</button>
-  </form>
-  <p id="ds-message" hidden></p>
+
+  <div id="deleg">
+    <h3>Servidores de nombres (NS y glue)</h3>
+    <p class="hint">
+      Los servidores a los que <code>lab.</code> delega tu zona, uno por línea: el
+      nombre y, si está dentro de tu zona, sus direcciones (glue). Edita la lista
+      y guárdala; reemplaza la delegación completa. Antes de quitar un servidor,
+      asegúrate de que los que quedan ya sirven la zona.
+    </p>
+    <table id="deleg-servers">
+      <thead><tr><th>Servidor</th><th>IPv4</th><th>IPv6</th></tr></thead>
+      <tbody><tr><td colspan="3" class="muted">Cargando…</td></tr></tbody>
+    </table>
+    <form id="deleg-form">
+      <textarea name="text" rows="3" spellcheck="false" autocomplete="off"></textarea>
+      <div class="buttons">
+        <button type="submit">Guardar delegación</button>
+        <button type="button" id="deleg-defaults" class="link">Valores iniciales</button>
+      </div>
+    </form>
+    <p id="deleg-message" hidden></p>
+  </div>
+
+  <div id="ds">
+    <h3>DS</h3>
+    <p class="hint">
+      Generá el DS en el nodo que firma, con <code>dnssec-dsfromkey</code> sobre el
+      archivo <code>.key</code> de la KSK, y pegá la línea que imprime. Para cambiar
+      un DS, publicá el nuevo antes de quitar el viejo.
+    </p>
+    <table id="ds-records">
+      <thead><tr><th>Key tag</th><th>Algoritmo</th><th>Digest</th><th></th></tr></thead>
+      <tbody><tr><td colspan="4" class="muted">Cargando…</td></tr></tbody>
+    </table>
+    <form id="ds-form">
+      <textarea name="text" rows="2" spellcheck="false" autocomplete="off"
+        placeholder="{{ groups[0] }}.lab. IN DS 12345 13 2 3F8A…"></textarea>
+      <button type="submit">Publicar DS</button>
+    </form>
+    <p id="ds-message" hidden></p>
+  </div>
 </section>
 <script src="/static/app.js"></script>
 <script src="/static/ds.js"></script>
+<script src="/static/delegation.js"></script>
 {% endblock %}

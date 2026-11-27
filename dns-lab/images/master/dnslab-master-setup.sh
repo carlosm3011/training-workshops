@@ -52,8 +52,12 @@ EOF
 chown bind:bind "$zone"
 named-checkzone -q lab "$zone"
 
+# Per group: its DS (#10), its NS set and the glue under it (#33).
 grants=$(for g in $(seq 1 "$DNSLAB_GROUPS"); do
-    printf '\t\t\tgrant dnslab-webapp name group%02d.lab. DS;\n' "$g"
+    z=$(printf 'group%02d.lab.' "$g")
+    printf '\t\t\tgrant dnslab-webapp name %s DS;\n' "$z"
+    printf '\t\t\tgrant dnslab-webapp name %s NS;\n' "$z"
+    printf '\t\t\tgrant dnslab-webapp wildcard *.%s A AAAA;\n' "$z"
 done)
 
 cat > /etc/bind/named.conf.lab <<EOF
@@ -99,8 +103,9 @@ view "authoritative" {
 		file "$zone";
 		dnssec-policy default;
 		inline-signing no;
-		// Only the web page's key may change lab., and only the DS
-		// records of each group's own zone (#10).
+		// Only the web page's key may change lab., and only each
+		// group's DS (#10), NS set and glue (#33). The web app
+		// checks which group may change what.
 		update-policy {
 $grants
 		};
