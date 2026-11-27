@@ -6,8 +6,7 @@
 FROM dnslab-node
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends iptables \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends iptables
 
 # Seeded into an empty /etc/bind instead of Ubuntu's stock files.
 COPY named.conf named.conf.options /usr/local/share/dnslab/seed/etc-bind/

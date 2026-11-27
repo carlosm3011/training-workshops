@@ -991,6 +991,10 @@ test-node: build
         x sh -c "command -v $t >/dev/null" || fail "$t missing"
     done
     ok "dig delv drill dnssec-keygen dnssec-signzone named-checkzone present"
+    x sh -c "command -v htop >/dev/null && command -v ifconfig >/dev/null" && ok "htop and ifconfig present" || fail "htop or ifconfig missing"
+    x sh -c "dpkg -s tree >/dev/null 2>&1" && fail "tree is already installed; pick another package for the apt check"
+    x apt-get install -y -q tree >/dev/null 2>&1 && x tree -L 1 /etc/bind >/dev/null \
+        && ok "apt-get install tree works without apt update first" || fail "apt-get install without apt update"
     [ "$(x dig +short @127.0.0.1 localhost A)" = 127.0.0.1 ] && ok "named answers queries" || fail "named doesn't answer"
     [ -s "$dir/etc-bind/named.conf" ] && sudo test -s "$dir/etc-bind/rndc.key" \
         && ok "empty bind mount seeded, rndc.key generated" || fail "bind mount not seeded"

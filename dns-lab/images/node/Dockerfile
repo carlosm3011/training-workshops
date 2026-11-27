@@ -7,13 +7,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     container=docker
 
+# apt's package lists are kept (unlike most images), so students can
+# `apt install` without `apt update` first; they're as fresh as the build.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus \
       bind9 bind9-utils bind9-dnsutils ldnsutils \
-      iproute2 iputils-ping tcpdump curl ca-certificates \
-      vim nano less bash-completion man-db \
- && rm -rf /var/lib/apt/lists/*
+      iproute2 iputils-ping net-tools tcpdump curl ca-certificates \
+      vim nano less htop bash-completion man-db
 
 # Keep systemd to what a container needs: no consoles, no udev, no
 # network or clock management (Docker does those).
