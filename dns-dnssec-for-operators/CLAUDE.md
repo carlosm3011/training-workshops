@@ -4,7 +4,7 @@
 
 ## Status
 
-Released (v0.6.4). There are 7 modules (`01-Introduccion` … `07-DNSSEC-Avanzado`) plus `index.md` (preface and syllabus), and each module has a deck. When a module changes, keep its `.md`, its deck script and the PDF in sync.
+Released (v0.6.4). There are 7 modules (`01-Introduccion` … `07-DNSSEC-Avanzado`) plus `index.md` (preface and syllabus), and each module has a deck. `08-Guia-del-Laboratorio.md` is the student guide for `../dns-lab/` (module 3, 4 and 6 exercises adapted to the lab); it has no deck. It's written in neutral Spanish with tú; the other chapters still have some voseo (#34). When a module changes, keep its `.md`, its deck script and the PDF in sync.
 
 ## Notes
 

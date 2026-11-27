@@ -2,6 +2,8 @@
 
 A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../dns-dnssec-for-operators/README.md). Each student group gets three BIND nodes on a shared `dns-lab` network, reachable through a web page with browser terminals. A master container is the lab's gateway to the Internet, its `lab.` parent zone and its validating resolver.
 
+**Students:** the lab guide is a chapter of the course book, [08-Guia-del-Laboratorio.md](../dns-dnssec-for-operators/08-Guia-del-Laboratorio.md) (Spanish): logging in, the certificate warning, each group's nodes and addresses, and modules 3, 4 and 6 done in the lab, with `delv-lab` to check the chain of trust.
+
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
 > **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls, terminals and DS form, served over HTTPS by Caddy with a self-signed certificate. `just init` brings up a complete environment, and `just backup` and `just restore` save and put back what students produced, and `just destroy` removes an environment.
