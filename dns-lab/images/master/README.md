@@ -38,9 +38,9 @@ The master has a lab-internal IPv6 address but no IPv6 route to the Internet: th
 
 Changing the number of groups means a new environment: `named.conf.lab` and `lab.` are only generated once.
 
-## Publishing DS records
+## Publishing DS records, NS and glue
 
-`lab.` accepts dynamic updates only when signed with the `dnslab-webapp` TSIG key, and its `update-policy` only allows DS records at each `groupNN.lab.` name:
+`lab.` accepts dynamic updates only when signed with the `dnslab-webapp` TSIG key. Its `update-policy` allows, per group: DS and NS records at `groupNN.lab.`, and A/AAAA records below it (the glue). Nothing else in `lab.`:
 
 ```sh
 nsupdate -k /etc/bind/dnslab-webapp.key <<'EOF'
@@ -49,7 +49,7 @@ send
 EOF
 ```
 
-The web page's DS form (#10) does this, running `nsupdate` inside the master with `docker exec`, then `rndc flushtree groupNN.lab. resolver` so the resolver forgets the old answers. The key stays on the master (`state/master/etc-bind/dnslab-webapp.key` on the host) and is never visible to the nodes.
+The web page's registrar section (DS #10, NS and glue #33) does this, running `nsupdate` inside the master with `docker exec`, then `rndc flushtree groupNN.lab. resolver` so the resolver forgets the old answers. The key stays on the master (`state/master/etc-bind/dnslab-webapp.key` on the host) and is never visible to the nodes.
 
 ## Run flags
 

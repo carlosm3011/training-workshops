@@ -61,7 +61,7 @@ Ingresa con tu usuario y contraseña. La sesión dura 12 horas; **Salir** la cie
 - La tabla muestra tus tres nodos: **Nodo**, **Estado**, **IPv4**, **IPv6** y **Activo hace**. Se actualiza sola cada dos segundos.
 - **Iniciar**, **Detener** y **Reiniciar** actúan sobre el container completo, como encender, apagar o reiniciar el servidor. Sirven para recuperar un nodo que quedó mal. Para que BIND tome un cambio de configuración no hacen falta: usa `rndc reload` o `systemctl restart bind9` dentro del nodo.
 - **Clic en el nombre de un nodo** abre una terminal en una pestaña nueva: una shell de `root` en ese nodo. Puedes abrir varias a la vez, una por nodo.
-- **DS en `lab.`** es el panel de "registrador" de tu zona: muestra los DS que `lab.` publica para `groupNN.lab.`, y permite publicar y quitar DS. Lo usas en el módulo 4.
+- **`groupNN.lab.` en `lab.`** es el panel de "registrador" de tu zona, con dos partes: **Servidores de nombres**, los NS y el glue con que `lab.` delega tu zona (lo usas en el módulo 6), y **DS**, para publicar y quitar los DS de tu zona (lo usas en el módulo 4).
 
 Dos cosas a tener en cuenta con las terminales:
 
@@ -81,7 +81,7 @@ Los nodos son Ubuntu 24.04 con BIND 9.18 y systemd, igual que los servidores del
 | Instalar BIND (`apt install bind9 …`) | Ya está instalado y corriendo, con la configuración de Ubuntu sin tocar. `rndc` ya funciona en cada nodo. |
 | Archivo de zona en `/etc/bind/db.example.com` | En `/var/lib/bind/db.groupNN.lab`. Con firma inline (módulo 4), `named` escribe archivos junto al de la zona (`.signed`, `.jnl`), y no puede escribir en `/etc/bind`: falla con `permission denied`. `/var/lib/bind` es el directorio que Ubuntu prevé para eso. |
 | AppArmor | No está activo dentro de los containers; los errores de AppArmor del módulo 3 no aparecen. |
-| Delegación y glue en el padre | Ya están hechos para `ns0`, `ns1` y `ns2`. El DS lo publicas tú en el panel **DS en `lab.`**. |
+| Delegación y glue en el padre | Ya están hechos para `ns0`, `ns1` y `ns2`. Los cambias, y publicas el DS, en el panel de registrador de la página. |
 | `rndc reload example.com` tras activar la política | `rndc reconfig`: un cambio en `named.conf.local` no se aplica recargando solo la zona. |
 | `rndc signing -list` | `rndc dnssec -status groupNN.lab` (con `dnssec-policy`, BIND rechaza `signing -list`). |
 | `dnssec-verify … example.com.signed` | `rndc sync` primero y `-I raw` (ver el módulo 4, más abajo). |
@@ -343,7 +343,7 @@ groupNN.lab. IN DS 54915 13 2 A94C3B1F…
 
 (El key tag, `54915` en el ejemplo, es distinto en cada grupo.)
 
-En la página del laboratorio, en **DS en `lab.`**, pega esa línea completa y presiona **Publicar DS**. El panel funciona como el de un registrador: revisa que el DS sea para tu zona y que el digest tenga el formato correcto, lo publica en `lab.` y lo muestra en la tabla. Compruébalo con DNS:
+En la página del laboratorio, en la parte **DS** del panel de registrador, pega esa línea completa y presiona **Publicar DS**. El panel funciona como el de un registrador: revisa que el DS sea para tu zona y que el digest tenga el formato correcto, lo publica en `lab.` y lo muestra en la tabla. Compruébalo con DNS:
 
 ```
 # dig +norec @10.53.0.1 groupNN.lab DS
@@ -495,7 +495,14 @@ Antes de tocar el padre, confirma que los dos públicos sirven la zona firmada:
 # dig @10.53.G.12 www.groupNN.lab A +dnssec +short
 ```
 
-Después, en la página del laboratorio, quita de la delegación de tu zona el NS `ns0.groupNN.lab.` y su glue, y deja `ns1` y `ns2`. Si tu laboratorio todavía no permite cambiar la delegación desde la página, pídele al instructor que lo haga.
+Después, en la página del laboratorio, en **Servidores de nombres**, borra la línea de `ns0` y deja las otras dos:
+
+```
+ns1.groupNN.lab. 10.53.G.11 fd53::G:11
+ns2.groupNN.lab. 10.53.G.12 fd53::G:12
+```
+
+y presiona **Guardar delegación**. La página reemplaza la delegación completa en una sola actualización: los NS y el glue de `ns0` salen de `lab.`. (Si la página responde que el laboratorio se creó antes de poder cambiar la delegación, pídele al instructor que lo habilite.) El botón **Valores iniciales** vuelve a cargar `ns0`, `ns1` y `ns2`, por si quieres deshacer el cambio.
 
 ```
 # dig +norec @10.53.0.1 groupNN.lab NS
@@ -542,7 +549,8 @@ La validación no cambió: el DS en `lab.` sigue apuntando a la misma KSK, que n
 | Abrir una terminal | Página del laboratorio | Clic en el nombre del nodo |
 | Recargar BIND | En el nodo | `named-checkconf && rndc reload` |
 | Recuperar un nodo | Página del laboratorio | **Reiniciar** |
-| Publicar o quitar el DS | Página, **DS en `lab.`** | Pegar la salida de `dnssec-dsfromkey`; **Quitar** |
+| Publicar o quitar el DS | Página, panel de registrador, **DS** | Pegar la salida de `dnssec-dsfromkey`; **Quitar** |
+| Cambiar NS y glue en `lab.` | Página, panel de registrador, **Servidores de nombres** | Un servidor por línea, con sus direcciones; **Guardar delegación** |
 | Ver el estado de las claves | `groupNN-0` | `rndc dnssec -status groupNN.lab` |
 | Validar de punta a punta | Cualquier nodo | `delv-lab @10.53.0.1 nombre.groupNN.lab A` |
 | Ver la cadena de confianza | Cualquier nodo | `delv-lab … +vtrace` |
