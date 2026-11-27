@@ -14,6 +14,7 @@ COPY named.conf named.conf.options /usr/local/share/dnslab/seed/etc-bind/
 COPY dnslab-nat.sh /usr/local/sbin/dnslab-nat
 COPY dnslab-master-setup.sh /usr/local/sbin/dnslab-master-setup
 COPY dnslab-lab-anchor.sh /usr/local/sbin/dnslab-lab-anchor
-COPY dnslab-nat.service dnslab-master-setup.service dnslab-lab-anchor.service /etc/systemd/system/
-RUN chmod 755 /usr/local/sbin/dnslab-nat /usr/local/sbin/dnslab-master-setup /usr/local/sbin/dnslab-lab-anchor \
- && systemctl enable dnslab-nat.service dnslab-master-setup.service dnslab-lab-anchor.service
+COPY dnslab-warm-cache.sh /usr/local/sbin/dnslab-warm-cache
+COPY dnslab-nat.service dnslab-master-setup.service dnslab-lab-anchor.service dnslab-warm-cache.service /etc/systemd/system/
+RUN chmod 755 /usr/local/sbin/dnslab-nat /usr/local/sbin/dnslab-master-setup /usr/local/sbin/dnslab-lab-anchor /usr/local/sbin/dnslab-warm-cache \
+ && systemctl enable dnslab-nat.service dnslab-master-setup.service dnslab-lab-anchor.service dnslab-warm-cache.service

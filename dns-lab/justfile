@@ -257,6 +257,14 @@ test-net: build
     docker start {{master_name}} >/dev/null; just _wait_resolver
     x group01-0 curl -sSI -m 10 -o /dev/null https://www.lacnic.net \
         && ok "Internet access is back once the master restarts" || fail "no Internet after master restart"
+    # #40: right after the master starts, with only dnslab-warm-cache's names in its cache.
+    for n in archive.ubuntu.com security.ubuntu.com pypi.org files.pythonhosted.org github.com deb.debian.org registry-1.docker.io; do
+        for t in A AAAA; do
+            [ "$(x group01-0 dig +time=10 +tries=1 $n $t | grep -oE 'status: [A-Z]+')" = "status: NOERROR" ] || fail "after the master restart: $n $t doesn't resolve"
+        done
+    done
+    ok "right after the master restarts, ubuntu, pypi, github, debian and docker names resolve (A and AAAA)"
+    x group01-0 apt-get install -y -q tree >/dev/null 2>&1 && ok "apt-get install on a node right after the master restarts" || fail "apt-get install"
     echo "all network checks passed"
 
 # Bring up the master and group01, check lab. and the resolver (incl. a signed group zone), tear down.
@@ -817,11 +825,16 @@ _master root=state:
 # lab.: named is up a few seconds before it can resolve (root priming),
 # and lab.'s trust anchor is only loaded once named has signed the zone
 # (dnslab-lab-anchor). Nodes booting meanwhile would see lookups fail.
+# Then up to 3 min for dnslab-warm-cache to finish (#40); it never fails.
 [private]
 _wait_resolver:
     @for _ in $(seq 60); do docker exec {{master_name}} dig +time=1 +tries=1 @127.0.0.1 . SOA 2>/dev/null | grep "status: NOERROR" >/dev/null && break; sleep 1; done
     @for _ in $(seq 60); do docker exec {{master_name}} dig +time=1 +tries=1 @127.0.0.1 lab. SOA 2>/dev/null | grep -E "^;; flags:.* ad[ ;]" >/dev/null && exit 0; sleep 1; done; \
         echo "{{master_name}}: resolver not validating lab. after 60 s" >&2; exit 1
+    @for _ in $(seq 180); do \
+        case "$(docker exec {{master_name}} systemctl show -P LoadState,ActiveState dnslab-warm-cache 2>/dev/null | tr '\n' ' ')" in \
+            "loaded active "*|"loaded failed "*|not-found*) exit 0 ;; esac; sleep 1; done; \
+        echo "{{master_name}}: dnslab-warm-cache still running after 3 min" >&2
 
 # Create and start node groupGG-N with its fixed addresses.
 [private]

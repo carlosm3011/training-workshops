@@ -55,7 +55,7 @@ just cert                  # the certificate's SHA-256 fingerprint
 - **Common student problems**:
   - `systemctl` fails with `Too many open files`: the host's inotify limits are too low (see below). `init` fixes this on new labs.
   - `apt install` says `Unable to locate package`: run `apt update` first (images built before #30 have no package lists).
-  - `apt install` or `curl` says `Temporary failure resolving` in the first minutes of a new lab: the master's resolver fails some Internet names for a while after it starts (#40). Wait a minute or two and retry.
+  - `apt install` or `curl` says `Temporary failure resolving` in the first minutes of a lab created before #40 was fixed: its master gives up on some Internet names with a cold cache. To fix such a lab without restarting anything, in the master add `max-recursion-queries 200;` inside `options { … };` in `/etc/bind/named.conf.options`, delete the `server ::/0 { bogus yes; };` block, and run `named-checkconf && rndc reconfig`.
   - A closed terminal tab kills the shell and its jobs; long-running commands need the tab left open.
   - `delv` on `lab.` names needs `delv-lab`, and `+cdflag` to see where a broken chain fails (see the student guide).
 

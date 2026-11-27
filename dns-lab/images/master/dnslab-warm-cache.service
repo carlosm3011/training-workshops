@@ -1,0 +1,12 @@
+[Unit]
+Description=Warm the lab resolver's cache (names with out-of-domain nameservers)
+After=named.service dnslab-lab-anchor.service
+Requires=named.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dnslab-warm-cache
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
