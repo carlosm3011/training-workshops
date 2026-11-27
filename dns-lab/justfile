@@ -539,8 +539,8 @@ test-web: build
         && ok "the same delegation in another order is a no-op" || fail "no-op: $(cat "$tmp/body")"
     deleg group01 group01 $'ns1.group01.lab. 10.53.1.11\nns3.group01.lab. 10.53.1.10 fd53::1:99\nns0.group02.lab.' >/dev/null
     [ "$(cat "$tmp/status")" = 200 ] \
-        && [ "$(referral group01.lab.)" = "ns0.group02.lab. ns1.group01.lab. ns3.group01.lab. | ns1.group01.lab.=10.53.1.11 ns3.group01.lab.=10.53.1.10 ns3.group01.lab.=fd53::1:99" ] \
-        && ok "a new in-zone server (ns3, any of the group's addresses) and an out-of-zone one (ns0.group02.lab.) without glue" \
+        && [ "$(referral group01.lab.)" = "ns0.group02.lab. ns1.group01.lab. ns3.group01.lab. | ns0.group02.lab.=10.53.2.10 ns0.group02.lab.=fd53::2:10 ns1.group01.lab.=10.53.1.11 ns3.group01.lab.=10.53.1.10 ns3.group01.lab.=fd53::1:99" ] \
+        && ok "a new in-zone server (ns3, any of the group's addresses) and an out-of-zone one (ns0.group02.lab., whose addresses come from group02's own glue)" \
         || fail "ns3 + out-of-zone: $(cat "$tmp/status") $(cat "$tmp/body") / $(referral group01.lab.)"
     deleg group01 group01 "$defaults" >/dev/null
     [ "$(cat "$tmp/status")" = 200 ] && [ "$(referral group01.lab.)" = "$initial" ] \
