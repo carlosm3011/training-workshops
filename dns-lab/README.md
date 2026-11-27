@@ -14,9 +14,9 @@ The rest of this README is reference. This section is the order of things for ru
 
 ### Setting up a lab host (once)
 
-- **Ubuntu 24.04** (other Linux hosts with cgroup v2 should work, but only Ubuntu 24.04 is tested) with **Docker** and your user in the `docker` group, and `sudo`. A running group takes about 120 MB of RAM (40 MB per node); kobe (4 CPUs, 8 GB) runs 6 groups using under 1 GB in all.
+- **Ubuntu 24.04** (other Linux hosts with cgroup v2 should work, but only Ubuntu 24.04 is tested; checked on kobe and lebron) with **Docker** and your user in the `docker` group, and `sudo`. The recipes call `sudo` (host settings, files the containers own), so run them in an interactive session where `sudo` can ask for your password, or give your account passwordless `sudo`. A running group takes about 120 MB of RAM (40 MB per node); kobe (4 CPUs, 8 GB) runs 6 groups using under 1 GB in all.
 - **[just](https://just.systems) 1.15 or later**: `sudo apt install just`.
-- A **DNS name** for the host, and **ports 80 and 443** reachable from where the students are. Nothing else needs to be open; the web app's port 8080 listens on loopback only.
+- A **DNS name** for the host, and **ports 80 and 443** free (stop any other web server or proxy on the host) and reachable from where the students are. Nothing else needs to be open; the web app's port 8080 listens on loopback only.
 - Clone this repository on the host and work in `dns-lab/`. Optionally, put the defaults for this host in `dns-lab/.env` ([Parameters](#parameters)).
 - `just init` raises the host's inotify limits the first time it runs (see below); nothing else on the host needs setting up.
 
@@ -24,7 +24,7 @@ The rest of this README is reference. This section is the order of things for ru
 
 ```sh
 cd ~/training-workshops && git pull && cd dns-lab
-just build                 # rebuild the images: picks up changes and fresh apt package lists
+just build                 # rebuild the images: picks up changes and fresh apt package lists (2-3 min)
 just groups=6 init         # one group per 2-3 students; about 40 s
 just status                # every container running, with its addresses
 just credentials           # one line per group, plus the instructor
@@ -55,6 +55,7 @@ just cert                  # the certificate's SHA-256 fingerprint
 - **Common student problems**:
   - `systemctl` fails with `Too many open files`: the host's inotify limits are too low (see below). `init` fixes this on new labs.
   - `apt install` says `Unable to locate package`: run `apt update` first (images built before #30 have no package lists).
+  - `apt install` or `curl` says `Temporary failure resolving` in the first minutes of a new lab: the master's resolver fails some Internet names for a while after it starts (#40). Wait a minute or two and retry.
   - A closed terminal tab kills the shell and its jobs; long-running commands need the tab left open.
   - `delv` on `lab.` names needs `delv-lab`, and `+cdflag` to see where a broken chain fails (see the student guide).
 

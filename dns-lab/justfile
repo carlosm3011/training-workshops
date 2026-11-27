@@ -135,7 +135,9 @@ backup: _check
     [ -r "{{state}}/env" ] || { echo "No environment to back up: {{state}}/env is created by 'just init'." >&2; exit 1; }
     . "{{state}}/env"
     mkdir -p "{{state}}/backups"
-    file="{{state}}/backups/dns-lab-$DNSLAB_HOST-$(date +%Y%m%d-%H%M%S).tar.gz"
+    # One second resolution: wait out a backup taken in the same second
+    # (destroy right after a manual backup) rather than overwrite it.
+    while file="{{state}}/backups/dns-lab-$DNSLAB_HOST-$(date +%Y%m%d-%H%M%S).tar.gz"; [ -e "$file" ]; do sleep 1; done
     items=$(cd "{{state}}" && ls -d {{state_items}} 2>/dev/null || true)
     # Zones and keys belong to the containers' bind user, hence sudo; numeric
     # owners, so a restore gives them back to that uid whatever the host calls
