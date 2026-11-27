@@ -6,7 +6,95 @@ A containerized lab for the hands-on parts of [DNS y DNSSEC para Operadores](../
 
 [GOAL.md](GOAL.md) holds the requirements and every design decision. Work is tracked in the [M0-Initial-Lab milestone](https://github.com/carlosm3011/training-workshops/milestone/1).
 
-> **Status:** in development. Done: the node and master images, the network, the master's DNS roles, and the web page's login, controls, terminals and DS form, served over HTTPS by Caddy with a self-signed certificate. `just init` brings up a complete environment, and `just backup` and `just restore` save and put back what students produced, and `just destroy` removes an environment.
+> **Status:** usable for courses. Modules 3, 4 and 6 of the student guide have been run end to end in the lab. Open: NS and glue changes from the web page (#33, needed for module 6 without hand edits), the guide as HTML in the web page (#32), Let's Encrypt (#11).
+
+## Instructor guide
+
+The rest of this README is reference. This section is the order of things for running a course.
+
+### Setting up a lab host (once)
+
+- **Ubuntu 24.04** (other Linux hosts with cgroup v2 should work, but only Ubuntu 24.04 is tested) with **Docker** and your user in the `docker` group, and `sudo`. A running group takes about 120 MB of RAM (40 MB per node); kobe (4 CPUs, 8 GB) runs 6 groups using under 1 GB in all.
+- **[just](https://just.systems) 1.15 or later**: `sudo apt install just`.
+- A **DNS name** for the host, and **ports 80 and 443** reachable from where the students are. Nothing else needs to be open; the web app's port 8080 listens on loopback only.
+- Clone this repository on the host and work in `dns-lab/`. Optionally, put the defaults for this host in `dns-lab/.env` ([Parameters](#parameters)).
+- `just init` raises the host's inotify limits the first time it runs (see below); nothing else on the host needs setting up.
+
+### Before a course
+
+```sh
+cd ~/training-workshops && git pull && cd dns-lab
+just build                 # rebuild the images: picks up changes and fresh apt package lists
+just groups=6 init         # one group per 2-3 students; about 40 s
+just status                # every container running, with its addresses
+just credentials           # one line per group, plus the instructor
+just cert                  # the certificate's SHA-256 fingerprint
+```
+
+- `init` only builds images that are missing, so run `just build` first to get image changes (for example `htop` or apt's package lists) into a new lab.
+- Hand each group its line from `just credentials` and the URL, `https://<host>/`. The `instructor` login sees every node and the master, and its DS panel has a menu to act for any group.
+- Show the students the fingerprint from `just cert`: until #11, the certificate is self-signed, and the student guide tells them to compare the fingerprint before accepting the browser's warning.
+- Point the students to the student guide, chapter 08 of the book ([08-Guia-del-Laboratorio.md](../dns-dnssec-for-operators/08-Guia-del-Laboratorio.md), also in the book's PDF).
+- Log in once as a group yourself and open a terminal, to check the page end to end from the students' network.
+
+### During a course
+
+- **Back up at the end of each day**: `just backup`, then copy the tarball off the host (`scp`). It holds every group's keys and zones, and the passwords.
+- **A node that misbehaves**: **Reiniciar** in the page (or `docker restart groupNN-N`). Everything students configured survives a restart.
+- **A node a group wants back to blank**: its configuration lives in `state/nodes/groupNN-N/`. Stop it, set the old directories aside, and start it with empty ones; it boots like a new node (stock config, new rndc key):
+
+  ```sh
+  docker stop group03-1
+  sudo mv state/nodes/group03-1 state/nodes/group03-1.old-$(date +%Y%m%d-%H%M)
+  mkdir -p state/nodes/group03-1/{etc-bind,var-cache-bind,var-lib-bind}
+  docker start group03-1
+  ```
+
+  `just backup` doesn't include the set-aside directory; delete it when it's no longer needed. A DS the group published stays in `lab.` until they remove it in the page.
+- **A group's DS**: the instructor login can list, publish and remove any group's DS in the page, which also clears the resolver's cache for that zone.
+- **Common student problems**:
+  - `systemctl` fails with `Too many open files`: the host's inotify limits are too low (see below). `init` fixes this on new labs.
+  - `apt install` says `Unable to locate package`: run `apt update` first (images built before #30 have no package lists).
+  - A closed terminal tab kills the shell and its jobs; long-running commands need the tab left open.
+  - `delv` on `lab.` names needs `delv-lab`, and `+cdflag` to see where a broken chain fails (see the student guide).
+
+### Changing lab. by hand (module 6, until #33)
+
+Module 6 removes `ns0.groupNN.lab.` from the group's delegation in `lab.`, which the web page can't do yet (#33). `lab.` is a dynamic, signed zone, so the edit goes through `rndc freeze`/`thaw`. **`rndc freeze` reports success before named has written the zone file**, so wait until the file's serial matches the one named serves before editing; otherwise the edit goes into an old file and the thaw discards every DS change since that file was written. While `lab.` is frozen, no group can publish a DS, so keep it short.
+
+```sh
+docker exec -it dnslab-master bash
+rndc freeze lab in authoritative
+live=$(dig +short @127.0.0.1 lab SOA | awk '{print $3}')
+until grep -qE "^\s+$live\s+; serial" /var/lib/bind/db.lab; do sleep 1; done; echo "file at serial $live"
+cp /var/lib/bind/db.lab /root/db.lab.$(date +%H%M%S)      # a copy, just in case
+vi /var/lib/bind/db.lab
+named-checkzone lab /var/lib/bind/db.lab
+rndc thaw lab in authoritative
+rndc flushtree groupNN.lab resolver
+```
+
+In the file, named has rewritten everything with `$ORIGIN` lines and relative names. To remove `ns0` from group 02:
+- under `$ORIGIN lab.`, delete the line `NS ns0.group02` in the `group02` block; if that line carries the owner name `group02`, move the name onto the next line;
+- under `$ORIGIN group02.lab.`, delete `ns0` and its `A` and `AAAA` lines;
+- increase the number on the `; serial` line;
+- leave every `RRSIG`, `NSEC` and `DNSKEY` alone: named re-signs what changed.
+
+Records you add must use fully qualified names ending in a dot. Afterwards, check that the thaw loaded your serial and kept the journal: `journalctl -u named -n 20` must not say `has gone backwards` or `journal file is out of date`. Then `dig +norec @127.0.0.1 group02.lab NS` shows the new referral.
+
+### After a course
+
+```sh
+just destroy               # asks, backs up, removes containers, networks and state (not backups)
+```
+
+Copy the last backup off the host if the students' work matters. `just restore` puts a backup back into a matching environment ([Restoring](#restoring)).
+
+### Security notes
+
+- The web app has the Docker socket, which is root on the host. Never publish port 8080; Caddy on 443 is the only way in.
+- `state/credentials` and the backups hold passwords and private keys in clear text (mode 600). Treat the host's `dns-lab/state/` like a password file.
+- Students are `root` in their nodes, and every node can reach every other group's nodes: the lab is for a class that trusts itself, not an isolation boundary.
 
 ## Usage
 
